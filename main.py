@@ -45,22 +45,22 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 FACTOR_FLAGS = {
     # ── 微观结构因子（活跃，可直接计算）────────────────────────────────────
-    "reversal_20":       True,   # 短期反转（20日累计收益）
-    "momentum_12_1":     True,   # 中期动量（12-1月）
+    "reversal_20":       False,   # 短期反转（20日累计收益）
+    "momentum_12_1":     False,   # 中期动量（12-1月）
     "turnover_20":       True,   # 换手率（20日均，市值中性化）
-    "amihud":            True,   # Amihud 非流动性（版本A，3月滚动，成交额口径）
-    "amihud_zero_adj":   True,   # Amihud 零交易日调整版（版本C，log+NT修正）
-    "cs_spread":         True,   # Corwin-Schultz 高低价价差
-    "roll_spread":       True,   # Roll 价差
-    "overnight_ret":     True,   # 隔夜收益率（月均）
-    "volatility_30":     True,   # 短期波动率（30日）
+    "amihud":            False,   # Amihud 非流动性（版本A，3月滚动，成交额口径）
+    "amihud_zero_adj":   False,   # Amihud 零交易日调整版（版本C，log+NT修正）
+    "cs_spread":         False,   # Corwin-Schultz 高低价价差
+    "roll_spread":       False,   # Roll 价差
+    "overnight_ret":     False,   # 隔夜收益率（月均）
+    "volatility_30":     False,   # 短期波动率（30日）
 
     # ── 基本面因子（活跃，可直接计算）──────────────────────────────────────
-    "pb":                True,   # 市净率（市值+行业双重中性化）
-    "pe_ttm":            True,   # 市盈率 TTM（仅 Database 2021+）
-    "dividend_yield":    True,   # 股息率 TTM（仅 Database 2021+）
-    "size":              True,   # 市值因子 log(流通市值)
-    "net_profit_yoy":    True,   # 净利润同比增速（市值+行业双重中性化）
+    "pb":                False,   # 市净率（市值+行业双重中性化）
+    "pe_ttm":            False,   # 市盈率 TTM（仅 Database 2021+）
+    "dividend_yield":    False,   # 股息率 TTM（仅 Database 2021+）
+    "size":              False,   # 市值因子 log(流通市值)
+    "net_profit_yoy":    False,   # 净利润同比增速（市值+行业双重中性化）
 
     # ── 待激活因子（需补充数据后将 False 改为 True）─────────────────────────
     # [需补充数据] marketrtn_daily.csv（日度市场收益率序列）
@@ -173,15 +173,17 @@ def _load_factor_cached(
     因子加载（带缓存）。
 
     缓存策略：
-      - 缓存文件：CACHE_DIR/<factor_name>.parquet
+      - 缓存文件：CACHE_DIR/<factor_name>.csv（仅依赖 pandas，无需 pyarrow）
       - 命中缓存且 force_recalc=False → 直接读取，跳过计算
       - 未命中或 force_recalc=True   → 重新计算并写入缓存
     """
-    cache_path = CACHE_DIR / f"{factor_name}.parquet"
+    cache_path = CACHE_DIR / f"{factor_name}.csv"
 
     if not force_recalc and cache_path.exists():
         print(f"  ✓ 读取缓存：{cache_path.name}")
-        return pd.read_parquet(cache_path)
+        df = pd.read_csv(cache_path, index_col=0)
+        df.index = pd.to_datetime(df.index)
+        return df
 
     # 计算因子
     factor = func(start=start, end=end)
@@ -189,7 +191,7 @@ def _load_factor_cached(
         return None
 
     # 写入缓存
-    factor.to_parquet(cache_path)
+    factor.to_csv(cache_path)
     action = "重新计算并缓存" if force_recalc and cache_path.exists() else "计算完成，已缓存"
     print(f"  ✓ {action}：{cache_path.name}  shape={factor.shape}")
     return factor
@@ -250,9 +252,10 @@ def main():
             continue
 
         # 分组回测
+        # fwd_ret：下期收益（T月末因子 → 预测 T+1月收益，避免前瞻偏差）
         try:
-            grp_ret   = group_return(factor, monthly_ret, n_groups=n_groups)
             fwd_ret   = monthly_ret.shift(-1)
+            grp_ret   = group_return(factor, fwd_ret, n_groups=n_groups)
             ic_series = calc_ic(factor, fwd_ret, method="spearman")
 
             results[factor_name] = {
