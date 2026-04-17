@@ -30,11 +30,17 @@ from config.settings import (
 # 内部工具函数
 # -----------------------------------------------------------------------------
 
-def _read_archive_csv(filename: str) -> pd.DataFrame:
+def _read_archive_csv(filename: str, numeric: bool = True) -> pd.DataFrame:
     """
     读取历史存档 CSV。
     原始格式：index=股票代码, columns=日期字符串（转置格式）
     输出格式：index=DatetimeIndex(日频), columns=股票代码
+
+    Parameters
+    ----------
+    numeric : bool
+        True（默认）：将数据列转换为 float（适用于价格、换手率等数值字段）
+        False：保留原始字符串（适用于 trade_status 等文字字段）
     """
     path = ARCHIVE_DATA_DIR / filename
     if not path.exists():
@@ -43,11 +49,16 @@ def _read_archive_csv(filename: str) -> pd.DataFrame:
     df = pd.read_csv(path, index_col=0)
     # 转置：行变列（日期变为 index，股票代码变为 columns）
     df = df.T
+    # 存档 CSV 转置后 index 首行可能含 "日期" 字符串（原始列名 artifact），需过滤
+    df = df[df.index != "日期"]
     df.index = pd.to_datetime(df.index)
     df.index.name = "date"
     df = df.sort_index()
     # 裁剪至存档时间范围
     df = df.loc[HIST_START:HIST_END]
+    # 数值转换（trade_status 等字符串字段不做转换）
+    if numeric:
+        df = df.apply(pd.to_numeric, errors="coerce")
     return df
 
 
@@ -117,9 +128,15 @@ def load_field(
     frames = []
 
     # --- 历史存档来源 ---
+    # trade_status 字段含"交易"/"停牌"字符串，不做数值转换
+    _STRING_FIELDS = {"trade_status"}
+
     if field in ARCHIVE_FIELD_MAP:
         try:
-            df_hist = _read_archive_csv(ARCHIVE_FIELD_MAP[field])
+            df_hist = _read_archive_csv(
+                ARCHIVE_FIELD_MAP[field],
+                numeric=(field not in _STRING_FIELDS),
+            )
             frames.append(("archive", df_hist))
         except FileNotFoundError as e:
             warnings.warn(str(e))

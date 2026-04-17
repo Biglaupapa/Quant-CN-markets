@@ -48,7 +48,8 @@ def calc_monthly_returns(
     open_ = apply_universe(open_, mask)
 
     # 月初开盘价（月第一个交易日开盘）
-    open_month_start  = open_.resample("ME").first()
+    # replace(0, nan)：开盘价为零时（涨跌停锁板等异常）不能作分母，否则收益率为 inf
+    open_month_start  = open_.resample("ME").first().replace(0, np.nan)
     # 月末收盘价
     close_month_end   = close.resample("ME").last()
     # 前收（用于判断涨跌停）
