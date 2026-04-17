@@ -6,9 +6,14 @@
 #   python main.py
 #
 # 控制逻辑：
-#   在 main() 函数中通过 FACTOR_FLAGS 字典中的布林值控制哪些因子参与计算。
+#   通过 FACTOR_FLAGS 字典中的布林值控制哪些因子参与计算。
 #   True  = 计算该因子并进行回测
 #   False = 跳过
+#
+# 因子缓存：
+#   因子值计算完成后自动保存至 factors/output/cache/<factor>.parquet
+#   下次运行时直接读取缓存，跳过重复计算。
+#   若需强制重新计算（如数据更新后），将 BACKTEST_CONFIG["force_recalc"] 设为 True。
 #
 # 待激活因子（标注 [需补充数据]）：
 #   这些因子代码已实现，但需要在 Database 中补充对应数据后才能启用。
@@ -27,6 +32,10 @@ from config.settings import HIST_START, FACTOR_OUTPUT_DIR
 from backtest.engine import calc_monthly_returns, group_return
 from backtest.metrics import calc_ic
 from backtest.report import print_factor_report, save_report
+
+# 因子缓存目录
+CACHE_DIR = FACTOR_OUTPUT_DIR / "cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # =============================================================================
@@ -76,11 +85,13 @@ FACTOR_FLAGS = {
 # =============================================================================
 
 BACKTEST_CONFIG = {
-    "start":    "2021-04-01",   # 回测起始（Database 有数据后）
-    "end":      None,           # None = 至今
-    "n_groups": 5,              # 分组数（5 或 10）
-    "freq":     12,             # 数据频率（月度=12，季度=4）
-    "save_output": True,        # 是否保存结果到 FACTOR_OUTPUT_DIR
+    "start":        "2014-01-01",  # 回测起始（archive 2014+，Database 2003+）
+    "end":          None,          # None = 至今
+    "n_groups":     5,             # 分组数（5 或 10）
+    "freq":         12,            # 数据频率（月度=12，季度=4）
+    "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
+    "force_recalc": False,         # True = 忽略缓存、强制重新计算所有因子
+                                   # （数据更新后或修改因子逻辑后使用）
 }
 
 # =============================================================================
@@ -133,17 +144,52 @@ def _get_factor_func(factor_name: str):
 # 主流程
 # =============================================================================
 
+def _load_factor_cached(
+    factor_name: str,
+    func,
+    start: str,
+    end,
+    force_recalc: bool,
+) -> pd.DataFrame | None:
+    """
+    因子加载（带缓存）。
+
+    缓存策略：
+      - 缓存文件：CACHE_DIR/<factor_name>.parquet
+      - 命中缓存且 force_recalc=False → 直接读取，跳过计算
+      - 未命中或 force_recalc=True   → 重新计算并写入缓存
+    """
+    cache_path = CACHE_DIR / f"{factor_name}.parquet"
+
+    if not force_recalc and cache_path.exists():
+        print(f"  ✓ 读取缓存：{cache_path.name}")
+        return pd.read_parquet(cache_path)
+
+    # 计算因子
+    factor = func(start=start, end=end)
+    if factor is None or factor.empty:
+        return None
+
+    # 写入缓存
+    factor.to_parquet(cache_path)
+    action = "重新计算并缓存" if force_recalc and cache_path.exists() else "计算完成，已缓存"
+    print(f"  ✓ {action}：{cache_path.name}  shape={factor.shape}")
+    return factor
+
+
 def main():
-    start    = BACKTEST_CONFIG["start"]
-    end      = BACKTEST_CONFIG["end"]
-    n_groups = BACKTEST_CONFIG["n_groups"]
-    freq     = BACKTEST_CONFIG["freq"]
-    save_out = BACKTEST_CONFIG["save_output"]
+    start        = BACKTEST_CONFIG["start"]
+    end          = BACKTEST_CONFIG["end"]
+    n_groups     = BACKTEST_CONFIG["n_groups"]
+    freq         = BACKTEST_CONFIG["freq"]
+    save_out     = BACKTEST_CONFIG["save_output"]
+    force_recalc = BACKTEST_CONFIG.get("force_recalc", False)
 
     print("=" * 60)
     print("  量化因子回测框架")
     print(f"  回测区间：{start} ~ {end or '至今'}")
     print(f"  分组数：{n_groups}，频率：{'月度' if freq == 12 else '季度'}")
+    print(f"  因子缓存：{'强制重算' if force_recalc else '启用（命中则跳过计算）'}")
     print("=" * 60)
 
     # --- 步骤 1：计算月度收益率（全局复用）---
@@ -155,28 +201,29 @@ def main():
         print(f"  ✗ 月度收益率计算失败：{e}")
         return
 
-    # --- 步骤 2：逐因子计算 + 回测 ---
+    # --- 步骤 2：逐因子加载（缓存优先）+ 回测 ---
     active_factors = [name for name, flag in FACTOR_FLAGS.items() if flag]
-    print(f"\n[Step 2] 共 {len(active_factors)} 个因子待计算：{active_factors}")
+    print(f"\n[Step 2] 共 {len(active_factors)} 个因子待处理：{active_factors}")
 
     results = {}
 
     for factor_name in active_factors:
         print(f"\n{'─' * 40}")
-        print(f"  计算因子：{factor_name}")
+        print(f"  因子：{factor_name}")
 
         func = _get_factor_func(factor_name)
         if func is None:
             print(f"  ✗ 未找到因子函数：{factor_name}")
             continue
 
-        # 因子计算
+        # 因子加载（缓存优先）
         try:
-            factor = func(start=start, end=end)
+            factor = _load_factor_cached(
+                factor_name, func, start, end, force_recalc
+            )
             if factor is None or factor.empty:
                 print(f"  ✗ {factor_name} 返回空 DataFrame，跳过")
                 continue
-            print(f"  ✓ 因子形状：{factor.shape}")
         except NotImplementedError as e:
             print(f"  ⚠ {factor_name} 尚未激活：{e}")
             continue
@@ -186,9 +233,8 @@ def main():
 
         # 分组回测
         try:
-            grp_ret  = group_return(factor, monthly_ret, n_groups=n_groups)
-            # 下期收益（forward return = 当期因子对应下一期收益）
-            fwd_ret  = monthly_ret.shift(-1)
+            grp_ret   = group_return(factor, monthly_ret, n_groups=n_groups)
+            fwd_ret   = monthly_ret.shift(-1)
             ic_series = calc_ic(factor, fwd_ret, method="spearman")
 
             results[factor_name] = {
@@ -197,7 +243,6 @@ def main():
                 "ic_series": ic_series,
             }
 
-            # 输出报告
             print_factor_report(factor_name, grp_ret, ic_series, freq=freq)
 
             if save_out:
@@ -209,7 +254,7 @@ def main():
 
     # --- 步骤 3：汇总 ---
     print(f"\n{'=' * 60}")
-    print(f"  完成！成功计算 {len(results)}/{len(active_factors)} 个因子")
+    print(f"  完成！成功处理 {len(results)}/{len(active_factors)} 个因子")
     if results:
         ic_means = {
             name: res["ic_series"].mean()
