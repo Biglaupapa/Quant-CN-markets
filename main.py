@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config.settings import HIST_START, FACTOR_OUTPUT_DIR
 from backtest.engine import calc_monthly_returns, group_return
 from backtest.metrics import calc_ic
-from backtest.report import print_factor_report, save_report
+from backtest.report import print_factor_report, save_report, plot_nav_curve
 
 # 因子缓存目录
 CACHE_DIR = FACTOR_OUTPUT_DIR / "cache"
@@ -268,6 +268,7 @@ def main():
 
             if save_out:
                 save_report(factor_name, grp_ret, ic_series, FACTOR_OUTPUT_DIR, freq=freq)
+                plot_nav_curve(factor_name, grp_ret, FACTOR_OUTPUT_DIR, freq=freq)
 
         except Exception as e:
             warnings.warn(f"  ✗ {factor_name} 回测异常：{e}")
