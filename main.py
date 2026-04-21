@@ -108,7 +108,7 @@ BACKTEST_CONFIG = {
     "n_groups":     5,             # 分组数（5 或 10）
     "freq":         12,            # 数据频率（月度=12，季度=4）
     "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
-    "force_recalc": False,         # True = 忽略缓存、强制重新计算所有因子
+    "force_recalc": True,          # True = 忽略缓存、强制重新计算所有因子
                                    # （数据更新后或修改因子逻辑后使用）
 }
 

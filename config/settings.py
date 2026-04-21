@@ -52,16 +52,30 @@ ARCHIVE_FIELD_MAP = {
 # Database CSV 格式：index=日期, columns=股票代码（标准格式）
 # -----------------------------------------------------------------------------
 DATABASE_FIELD_MAP = {
-    "close":           "close.csv",           # 不复权收盘价
-    "open":            "open.csv",            # 不复权开盘价
-    "high":            "high.csv",            # 最高价
-    "low":             "low.csv",             # 最低价
-    "volume":          "volume.csv",          # 成交量（股数）
-    "amt":             "amt.csv",             # 成交额（千元）
-    "turn":            "turn.csv",            # 换手率
-    "pe_ttm":          "pe_ttm.csv",          # PE TTM
-    "pb":              "pb.csv",              # 市净率
-    "dividend_ratio":  "dividend_ratio.csv",  # 股息率 TTM
+    # 价格（不复权）
+    "close":           "close.csv",
+    "open":            "open.csv",
+    "high":            "high.csv",
+    "low":             "low.csv",
+    "high_adj":        "high_adj.csv",
+    "low_adj":         "low_adj.csv",
+    # 后复权价格（原为存档专属，现已补入 Database）
+    "close_adj":       "close_adj.csv",
+    "open_adj":        "open_adj.csv",
+    # 交易量
+    "volume":          "volume.csv",
+    "amt":             "amt.csv",
+    "turn":            "turn.csv",
+    # 基本面（快照）
+    "pe_ttm":          "pe_ttm.csv",
+    "pb":              "pb.csv",
+    "dividend_ratio":  "dividend_ratio.csv",
+    # 股票池过滤（原为存档专属，现已补入 Database）
+    # Database 中字段名与存档不同，此处统一映射
+    "is_st":           "st.csv",               # 1=ST，0=正常
+    "trade_status":    "status.csv",           # 1=正常交易，0=停牌（与存档字符串格式不同）
+    "listing_days":    "listed_days.csv",      # 上市至今交易日数
+    "float_shares":    "free_float_shares.csv", # 流通股本（股）
 }
 
 # -----------------------------------------------------------------------------

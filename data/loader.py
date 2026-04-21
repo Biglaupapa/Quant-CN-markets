@@ -46,12 +46,19 @@ def _read_archive_csv(filename: str, numeric: bool = True) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[loader] 存档文件不存在: {path}")
 
-    df = pd.read_csv(path, index_col=0)
+    df = pd.read_csv(path, index_col=0, low_memory=False)
     # 转置：行变列（日期变为 index，股票代码变为 columns）
     df = df.T
-    # 存档 CSV 转置后 index 首行可能含 "日期" 字符串（原始列名 artifact），需过滤
-    df = df[df.index != "日期"]
-    df.index = pd.to_datetime(df.index)
+    # 存档 CSV 转置后 index 可能混入非日期行，统一清理：
+    #   - "日期"（原始列名 artifact）
+    #   - 尾部空格（如 "20140103 "）
+    #   - 空白行
+    #   - "Unnamed: N"（CSV 空列转置后的残留）
+    # 只保留严格的 8 位纯数字字符串（YYYYMMDD）
+    df.index = df.index.str.strip()
+    df = df[df.index.str.match(r"^\d{8}$")]
+    # 存档日期格式固定为 YYYYMMDD，显式指定避免 pandas 误推断
+    df.index = pd.to_datetime(df.index, format="%Y%m%d")
     df.index.name = "date"
     df = df.sort_index()
     # 裁剪至存档时间范围
@@ -72,8 +79,9 @@ def _read_database_csv(filename: str) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"[loader] Database 文件不存在: {path}")
 
-    df = pd.read_csv(path, index_col=0)
-    df.index = pd.to_datetime(df.index)
+    df = pd.read_csv(path, index_col=0, low_memory=False)
+    # Database 日期格式可能为 YYYY-MM-DD 或 YYYYMMDD，用 format="mixed" 兼容两种
+    df.index = pd.to_datetime(df.index, format="mixed")
     df.index.name = "date"
     df = df.sort_index()
     df = df.loc[DB_START:]
@@ -141,19 +149,11 @@ def load_field(
         except FileNotFoundError as e:
             warnings.warn(str(e))
 
-    # --- Database 来源（同名字段，Database 中可能键名不同）---
-    db_field = field  # 大多数 Database 字段名与 ARCHIVE 字段名相同的子集
-    if field in DATABASE_FIELD_MAP:
-        db_field = field
-    elif field == "close_adj":
-        # 存档特有字段，Database 中暂无后复权价格
-        db_field = None
-    elif field == "open_adj":
-        db_field = None
-    elif field in ("listing_days", "is_st", "trade_status", "float_shares"):
-        # 这些字段仅在存档 CSV 中，Database 尚未覆盖
-        db_field = None
-    elif field == "net_profit":
+    # --- Database 来源 ---
+    # 所有在 DATABASE_FIELD_MAP 中的字段直接读取；
+    # net_profit 仅存档有，其余字段均已覆盖。
+    db_field = field if field in DATABASE_FIELD_MAP else None
+    if field == "net_profit":
         db_field = None
 
     if db_field and db_field in DATABASE_FIELD_MAP:

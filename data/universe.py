@@ -72,13 +72,25 @@ def build_investable_mask(
     # --- 规则 1：剔除 ST 股 ---
     if is_st is not None:
         st = is_st.reindex(columns=all_cols)
-        # 值为 1 表示 ST；部分数据源用字符串"1"，做兼容处理
-        mask &= (st.astype(str).replace({"1.0": "1", "nan": "0"}) != "1")
+        # 兼容两种格式：
+        #   存档：字符串 "1" / "1.0" = ST
+        #   Database：数值 1.0 = ST
+        st_numeric = pd.to_numeric(st.stack(), errors="coerce").unstack()
+        mask &= (st_numeric != 1)
 
     # --- 规则 2：剔除停牌股 ---
     if trade_status is not None:
         ts = trade_status.reindex(columns=all_cols)
-        mask &= (ts == "交易")
+        # 兼容两种格式：
+        #   存档：字符串 "交易" = 正常交易
+        #   Database：数值 1.0 = 正常交易，0.0 = 停牌
+        ts_numeric = pd.to_numeric(ts.stack(), errors="coerce").unstack()
+        if ts_numeric.notna().any().any():
+            # Database 数字格式：1 = 正常
+            mask &= (ts_numeric == 1)
+        else:
+            # 存档字符串格式："交易" = 正常
+            mask &= (ts == "交易")
 
     # --- 规则 3：剔除次新股 ---
     if listing_days is not None:
