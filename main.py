@@ -47,10 +47,10 @@ FACTOR_FLAGS = {
     # ── 微观结构因子（活跃，可直接计算）────────────────────────────────────
     "reversal_20":       False,   # 短期反转（20日累计收益）
     "momentum_12_1":     False,   # 中期动量（12-1月）
-    "turnover_20":       True,   # 换手率（20日均，市值中性化）
-    "amihud":            False,   # Amihud 非流动性（版本A，3月滚动，成交额口径）
+    "turnover_20":       False,   # 换手率（20日均，市值中性化）✅ 已验证
+    "amihud":            True,    # Amihud 非流动性（版本A，3月滚动，成交额口径）
     "amihud_zero_adj":   False,   # Amihud 零交易日调整版（版本C，log+NT修正）
-    "cs_spread":         False,   # Corwin-Schultz 高低价价差
+    "cs_spread":         True,    # Corwin-Schultz 高低价价差
     "roll_spread":       False,   # Roll 价差
     "overnight_ret":     False,   # 隔夜收益率（月均）
     "volatility_30":     False,   # 短期波动率（30日）
@@ -95,8 +95,16 @@ FACTOR_FLAGS = {
 #   仅存档   "2014-01-01" ~ "2021-03-31"（后复权价格因子全量可用）
 # =============================================================================
 
-BACKTEST_START = "2014-01-01"   # ← 修改起始日期
-BACKTEST_END   = "2024-12-31"   # ← 修改截止日期（None = 运行当天）
+BACKTEST_START = "2004-01-01"   # ← 修改起始日期
+#   数据限制：free_float_shares 从 2004-01-02 起，是所有字段中最晚的起点
+
+# 截止日期：自动取上一个完整月末
+#   逻辑：当月数据不完整，只用已完整收盘的月份
+#   例：今天 2026-04-21 → 自动设为 2026-03-31
+#   每次运行自动更新，无需手动修改
+BACKTEST_END = str(
+    (pd.Timestamp.today().to_period("M") - 1).to_timestamp("M").date()
+)
 
 # =============================================================================
 # 回测参数
@@ -108,7 +116,7 @@ BACKTEST_CONFIG = {
     "n_groups":     5,             # 分组数（5 或 10）
     "freq":         12,            # 数据频率（月度=12，季度=4）
     "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
-    "force_recalc": True,          # True = 忽略缓存、强制重新计算所有因子
+    "force_recalc": False,         # True = 忽略缓存、强制重新计算所有因子
                                    # （数据更新后或修改因子逻辑后使用）
 }
 

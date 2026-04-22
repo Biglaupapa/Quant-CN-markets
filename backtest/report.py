@@ -139,9 +139,9 @@ def plot_nav_curve(
     ax.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
 
     # ── 格式 ────────────────────────────────────────────────────────
-    ax.set_title(f"{factor_name}  —  分组累计净值", fontsize=14, pad=12)
-    ax.set_xlabel("日期", fontsize=10)
-    ax.set_ylabel("累计净值", fontsize=10)
+    ax.set_title(f"{factor_name}  —  Cumulative Group NAV", fontsize=14, pad=12)
+    ax.set_xlabel("Date", fontsize=10)
+    ax.set_ylabel("Cumulative NAV", fontsize=10)
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
     ax.legend(loc="upper left", fontsize=9, framealpha=0.7)
     ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)

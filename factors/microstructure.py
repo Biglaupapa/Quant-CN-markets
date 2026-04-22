@@ -151,6 +151,10 @@ def calc_turnover_20(
     close_unadj  = data.get("close")
     float_shares = data.get("float_shares")
 
+    if turn is None:
+        warnings.warn("[microstructure] calc_turnover_20: 换手率数据加载失败，跳过")
+        return pd.DataFrame()
+
     mask = build_investable_mask(start=start, end=end, freq="D")
     turn = apply_universe(turn, mask)
 
@@ -187,10 +191,11 @@ def calc_amihud(
     其中 d 取过去 3 个月的日度数据，滞后 1 个月以避免前瞻偏差。
 
     数据：
-        close     → 计算日度收益率 |R|      [db]/[arch]
-        amt       → 成交额（千元）           [db]
+        close_adj → 计算日度收益率 |R|      [db]
+        amt       → 成交额（元）             [db]  ← 单位：元（非千元）
+                    ILLIQ_SCALE = 1e5 用于保持数值在合理范围，不影响截面排名
 
-    注：存档数据无成交额字段，该因子主要依赖 Database（2021+）。
+    覆盖：2003-01-02 至今，6077 只股票。
     """
     data = load_data(["close_adj", "amt"], start=start, end=end)
     close = data.get("close_adj") or data.get("close")
@@ -320,27 +325,29 @@ def calc_cs_spread(
 ) -> pd.DataFrame:
     """
     Corwin-Schultz (2012) 高低价价差估计：
-        1. h_l_sq = (ln(H/L))^2
-        2. gamma   = (ln(max(H_t, H_{t+1}) / min(L_t, L_{t+1})))^2
-        3. beta    = h_l_sq_t + h_l_sq_{t+1}
-        4. alpha   = (√(2β) - √β) / (3 - 2√2) - √(γ / (3 - 2√2))
-        5. spread  = 2(e^α - 1) / (1 + e^α)    [负值截断为 0]
+        1. beta  = (ln(H_t/L_t))² + (ln(H_{t+1}/L_{t+1}))²
+        2. gamma = (ln(max(H_t,H_{t+1}) / min(L_t,L_{t+1})))²
+        3. alpha = (√(2β) - √β) / (3-2√2) - √(γ/(3-2√2))
+        4. spread = 2(e^α-1)/(1+e^α)，负值截断为 0
 
     月度平均，要求至少 MIN_ROLLING_VALID_DAYS 个有效值。
-    数据：high, low, close [db]
+
+    数据：high_adj, low_adj [db]
+        使用后复权高低价，避免除权日前后跨日价格不连续导致
+        max(H_t, H_{t+1}) / min(L_t, L_{t+1}) 失真。
+        覆盖：2003-01-02 至今，6077 只股票。
     """
-    data = load_data(["high", "low", "close"], start=start, end=end)
-    high  = data.get("high")
-    low   = data.get("low")
-    close = data.get("close")
+    data = load_data(["high_adj", "low_adj"], start=start, end=end)
+    high = data.get("high_adj")
+    low  = data.get("low_adj")
 
     if high is None or low is None:
-        warnings.warn("[microstructure] calc_cs_spread: 缺少 high/low 数据（仅 Database 有）")
+        warnings.warn("[microstructure] calc_cs_spread: 缺少 high_adj/low_adj 数据")
         return pd.DataFrame()
 
     mask = build_investable_mask(start=start, end=end, freq="D")
-    high  = apply_universe(high,  mask)
-    low   = apply_universe(low,   mask)
+    high = apply_universe(high, mask)
+    low  = apply_universe(low,  mask)
 
     # 防止 H/L 出现 0 或负数
     high = high.replace(0, np.nan)
