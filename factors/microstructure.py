@@ -192,13 +192,14 @@ def calc_amihud(
 
     数据：
         close_adj → 计算日度收益率 |R|      [db]
-        amt       → 成交额（元）             [db]  ← 单位：元（非千元）
-                    ILLIQ_SCALE = 1e5 用于保持数值在合理范围，不影响截面排名
+        amt       → 成交额（元）→ 内部换算为百万元  [db]
+                    ILLIQ_SCALE = 1e5，结合百万元单位使数值在合理范围
 
     覆盖：2003-01-02 至今，6077 只股票。
+    因子方向：ILLIQ 越大 = 流动性越差；G1=流动性最好，G5=流动性最差。
     """
     data = load_data(["close_adj", "amt"], start=start, end=end)
-    close = data.get("close_adj") or data.get("close")
+    close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
     amt   = data.get("amt")
 
     if close is None or amt is None:
@@ -211,11 +212,11 @@ def calc_amihud(
 
     # 日度绝对收益率
     abs_ret = (close / close.shift(1) - 1).abs()
-    # 替换零成交额为 NaN（避免除零）
-    amt_clean = amt.replace(0, np.nan)
+    # 成交额换算为百万元，零值替换为 NaN（避免除零）
+    amt_millions = (amt / 1e6).replace(0, np.nan)
 
-    # 日度 Amihud 值
-    daily_illiq = abs_ret / amt_clean * ILLIQ_SCALE
+    # 日度 Amihud 值：|R| / 成交额(百万元) × 缩放系数
+    daily_illiq = abs_ret / amt_millions * ILLIQ_SCALE
 
     # 月度分组计算（3个月滚动）
     daily_illiq.index = pd.to_datetime(daily_illiq.index)
@@ -244,10 +245,8 @@ def calc_amihud(
         return pd.DataFrame()
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
-    # 滞后 AMIHUD_LAG_MONTHS 个月
+    # 滞后 AMIHUD_LAG_MONTHS 个月（避免前瞻偏差）
     factor = factor.shift(AMIHUD_LAG_MONTHS)
-    # 方向：非流动性越大越差，取负数使因子方向与收益正相关（流动性好→因子大）
-    factor = -factor
 
     return preprocess(factor)
 
@@ -270,7 +269,7 @@ def calc_amihud_zero_adj(
         volume  → 成交量（股数）[db]
     """
     data = load_data(["close_adj", "volume"], start=start, end=end)
-    close  = data.get("close_adj") or data.get("close")
+    close  = data.get("close_adj")
     volume = data.get("volume")
 
     if close is None or volume is None:
@@ -310,7 +309,6 @@ def calc_amihud_zero_adj(
         return pd.DataFrame()
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
-    factor = -factor  # 方向：值越大 → 流动性越差 → 取负
 
     return preprocess(factor)
 
@@ -382,7 +380,6 @@ def calc_cs_spread(
         return pd.DataFrame()
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
-    factor = -factor  # 方向：价差越大 → 流动性越差 → 取负
 
     return preprocess(factor)
 
@@ -403,7 +400,7 @@ def calc_roll_spread(
     月度计算，数据：close [arch]/[db]
     """
     data = load_data(["close_adj"], start=start, end=end)
-    close = data.get("close_adj") or data.get("close")
+    close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
 
     if close is None:
         warnings.warn("[microstructure] calc_roll_spread: 缺少 close 数据")
@@ -441,7 +438,6 @@ def calc_roll_spread(
         return pd.DataFrame()
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
-    factor = -factor  # 方向：价差越大 → 流动性越差 → 取负
 
     return preprocess(factor)
 
@@ -461,7 +457,7 @@ def calc_overnight_ret(
     """
     data = load_data(["open", "close_adj"], start=start, end=end)
     open_p  = data.get("open")
-    close   = data.get("close_adj") or data.get("close")
+    close   = data.get("close_adj")
 
     if open_p is None or close is None:
         warnings.warn("[microstructure] calc_overnight_ret: 缺少 open 或 close 数据")
@@ -494,7 +490,7 @@ def calc_volatility_30(
     数据：close [arch]/[db]
     """
     data = load_data(["close_adj"], start=start, end=end)
-    close = data.get("close_adj") or data.get("close")
+    close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
 
     if close is None:
         warnings.warn("[microstructure] calc_volatility_30: 缺少 close 数据")

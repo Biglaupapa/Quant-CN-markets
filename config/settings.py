@@ -104,7 +104,7 @@ MOMENTUM_SKIP            = 1     # 中期动量因子跳过最近 N 月（避免
 TURNOVER_WINDOW          = 20    # 换手率滚动窗口（交易日）
 AMIHUD_WINDOW_MONTHS     = 3     # Amihud 滚动窗口（月）
 AMIHUD_LAG_MONTHS        = 1     # Amihud 滞后月数（避免前瞻偏差）
-ILLIQ_SCALE              = 1e5   # Amihud 缩放系数（成交额单位：千元）
+ILLIQ_SCALE              = 1e5   # Amihud 缩放系数（成交额已换算为百万元后使用）
 VOLATILITY_WINDOW        = 30    # 短期波动率窗口（交易日）
 
 # 需要额外数据的复杂因子（FF3 / 市场收益率序列）
