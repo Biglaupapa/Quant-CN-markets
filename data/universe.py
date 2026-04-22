@@ -81,16 +81,15 @@ def build_investable_mask(
     # --- 规则 2：剔除停牌股 ---
     if trade_status is not None:
         ts = trade_status.reindex(columns=all_cols)
-        # 兼容两种格式：
+        # 兼容两种格式（数据中可能混合存在，逐格判断）：
         #   存档：字符串 "交易" = 正常交易
         #   Database：数值 1.0 = 正常交易，0.0 = 停牌
+        # 注意：不能用 if/else 分支，因为 2004-2021 间
+        #   2004-2013 / 2021+ 为数值，2014-2021 为字符串（存档优先），
+        #   必须逐格兼容，否则字符串行全部变 NaN 被误判为停牌。
         ts_numeric = pd.to_numeric(ts.stack(), errors="coerce").unstack()
-        if ts_numeric.notna().any().any():
-            # Database 数字格式：1 = 正常
-            mask &= (ts_numeric == 1)
-        else:
-            # 存档字符串格式："交易" = 正常
-            mask &= (ts == "交易")
+        tradeable  = (ts_numeric == 1) | (ts == "交易")
+        mask &= tradeable
 
     # --- 规则 3：剔除次新股 ---
     if listing_days is not None:
