@@ -45,15 +45,15 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 FACTOR_FLAGS = {
     # ── 微观结构因子（活跃，可直接计算）────────────────────────────────────
-    "reversal_20":       False,   # 短期反转（20日累计收益）
-    "momentum_12_1":     False,   # 中期动量（12-1月）
-    "turnover_20":       False,   # 换手率（20日均，市值中性化）✅ 已验证
-    "amihud":            True,    # Amihud 非流动性（版本A，3月滚动，成交额口径）
-    "amihud_zero_adj":   False,   # Amihud 零交易日调整版（版本C，log+NT修正）
-    "cs_spread":         True,    # Corwin-Schultz 高低价价差
-    "roll_spread":       False,   # Roll 价差
-    "overnight_ret":     False,   # 隔夜收益率（月均）
-    "volatility_30":     False,   # 短期波动率（30日）
+    "reversal_20":       True,    # 短期反转（20日累计收益）
+    "momentum_12_1":     True,    # 中期动量（12-1月）
+    "turnover_20":       True,    # 换手率（20日均，市值中性化）✅ 已验证
+    "amihud":            True,    # Amihud 非流动性（版本A，3月滚动，成交额口径）✅ 已验证
+    "amihud_zero_adj":   True,    # Amihud 零交易日调整版（版本C，log+NT修正）
+    "cs_spread":         True,    # Corwin-Schultz 高低价价差 ✅ 已验证
+    "roll_spread":       True,    # Roll 价差
+    "overnight_ret":     True,    # 隔夜收益率（月均）
+    "volatility_30":     True,    # 短期波动率（30日）
 
     # ── 基本面因子（活跃，可直接计算）──────────────────────────────────────
     "pb":                False,   # 市净率（市值+行业双重中性化）
@@ -116,7 +116,7 @@ BACKTEST_CONFIG = {
     "n_groups":     5,             # 分组数（5 或 10）
     "freq":         12,            # 数据频率（月度=12，季度=4）
     "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
-    "force_recalc": False,         # True = 忽略缓存、强制重新计算所有因子
+    "force_recalc": True,          # True = 忽略缓存、强制重新计算所有因子
                                    # （数据更新后或修改因子逻辑后使用）
 }
 

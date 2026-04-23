@@ -51,6 +51,7 @@ from config.settings import (
     VOLATILITY_WINDOW,
     MIN_ROLLING_VALID_DAYS,
     TURN_NEUTRALIZE_SIZE,
+    USE_ADJ_PRICE,
     # 待激活因子参数（暂不调用）
     CAPM_BETA_WINDOW,
     IVOL_WINDOW_MONTHS,
@@ -59,6 +60,11 @@ from config.settings import (
     AP_BETA_WINDOW_MONTHS,
     AP_C1, AP_C2, AP_C3,
 )
+
+# 价格字段选择（由 settings.USE_ADJ_PRICE 控制）
+# 修改 settings.py 中的 USE_ADJ_PRICE 即可全局切换，无需逐函数修改
+_CLOSE = "close_adj" if USE_ADJ_PRICE else "close"
+_OPEN  = "open_adj"  if USE_ADJ_PRICE else "open"
 
 
 # =============================================================================
@@ -83,8 +89,8 @@ def calc_reversal_20(
 
     输出：月末截面值（日度计算 → 月末采样）
     """
-    data = load_data(["close_adj"], start=start, end=end)
-    close = data["close_adj"]
+    data = load_data([_CLOSE], start=start, end=end)
+    close = data[_CLOSE]
 
     mask = build_investable_mask(start=start, end=end, freq="D")
     close = apply_universe(close, mask)
@@ -118,8 +124,8 @@ def calc_momentum_12_1(
 
     输出：月度截面
     """
-    data = load_data(["close_adj"], start=start, end=end)
-    close = data["close_adj"]
+    data = load_data([_CLOSE], start=start, end=end)
+    close = data[_CLOSE]
 
     mask = build_investable_mask(start=start, end=end, freq="D")
     close = apply_universe(close, mask)
@@ -268,8 +274,8 @@ def calc_amihud_zero_adj(
         close   → 日度收益率    [db]/[arch]
         volume  → 成交量（股数）[db]
     """
-    data = load_data(["close_adj", "volume"], start=start, end=end)
-    close  = data.get("close_adj")
+    data = load_data([_CLOSE, "volume"], start=start, end=end)
+    close  = data.get(_CLOSE)
     volume = data.get("volume")
 
     if close is None or volume is None:
@@ -399,8 +405,8 @@ def calc_roll_spread(
 
     月度计算，数据：close [arch]/[db]
     """
-    data = load_data(["close_adj"], start=start, end=end)
-    close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
+    data = load_data([_CLOSE], start=start, end=end)
+    close = data.get(_CLOSE)
 
     if close is None:
         warnings.warn("[microstructure] calc_roll_spread: 缺少 close 数据")
@@ -428,8 +434,16 @@ def calc_roll_spread(
                 cov_row[col] = np.nan
                 continue
             cov = np.cov(s.values[1:], s.values[:-1])[0, 1]
-            # 仅负协方差有意义
-            cov_row[col] = 2 * np.sqrt(-cov) if cov < 0 else 0.0
+            # Cov < 0：bid-ask bounce 可检测，Roll spread 有意义，赋正值
+            # Cov ≥ 0：Roll 公式产生虚数，无法估计 spread，置 NaN（不是 0）
+            # 理由：Fong(2017) 和 Goyenko(2009) 均指出，正样本自相关
+            #   对应真实 serial correlation 接近零的高流动性股票，
+            #   Roll 模型对这类股票没有判别力。
+            #   文献习惯赋 0（用于流动性水平比较），但在截面因子排序中，
+            #   大量 0 值聚集会导致 pd.qcut 分组崩溃（57% 数据同值）。
+            #   改为 NaN：明确区分"无法估计"与"流动性充分"，
+            #   在 Cov<0 的子集（约 43% 股票-月份）内部排序，经济含义清晰。
+            cov_row[col] = 2 * np.sqrt(-cov) if cov < 0 else np.nan
 
         frames.append(pd.Series(cov_row))
         dates.append(period_end)
@@ -455,9 +469,9 @@ def calc_overnight_ret(
     反映信息不对称和隔夜风险。
     数据：open [db], close [arch]/[db]
     """
-    data = load_data(["open", "close_adj"], start=start, end=end)
-    open_p  = data.get("open")
-    close   = data.get("close_adj")
+    data = load_data([_OPEN, _CLOSE], start=start, end=end)
+    open_p  = data.get(_OPEN)
+    close   = data.get(_CLOSE)
 
     if open_p is None or close is None:
         warnings.warn("[microstructure] calc_overnight_ret: 缺少 open 或 close 数据")
@@ -489,8 +503,8 @@ def calc_volatility_30(
 
     数据：close [arch]/[db]
     """
-    data = load_data(["close_adj"], start=start, end=end)
-    close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
+    data = load_data([_CLOSE], start=start, end=end)
+    close = data.get(_CLOSE)
 
     if close is None:
         warnings.warn("[microstructure] calc_volatility_30: 缺少 close 数据")
