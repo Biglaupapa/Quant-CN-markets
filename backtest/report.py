@@ -87,8 +87,8 @@ def plot_nav_curve(
 
     图形内容
     --------
-    - G1~Gn：各分组累计净值（蓝色渐变细线）
-    - LS：多空组合累计净值（黑色粗线，单独图例标注）
+    - G1~Gn：各分组累计净值（tab10 多色，每组独立颜色）
+    - LS：多空组合累计净值（黑色粗虚线，单独图例标注）
     - 右上角标注 LS 年化收益率与 Sharpe
 
     Parameters
@@ -99,7 +99,7 @@ def plot_nav_curve(
         分组月度收益，index=月末日期，columns=[G1,...,Gn,LS]
         来自 engine.group_return()
     output_dir : Path
-        图片输出目录
+        图片输出目录（通常为 IMG_OUTPUT_DIR）
     freq : int
         数据年化频率（月度=12，季度=4），用于计算 Sharpe
     """
@@ -111,41 +111,60 @@ def plot_nav_curve(
     group_cols = [c for c in group_ret.columns if c.startswith("G")]
     n_groups   = len(group_cols)
 
-    # ── 颜色方案：G1(深蓝)→Gn(浅蓝)，LS 黑色 ───────────────────
-    blues = plt.cm.Blues(np.linspace(0.35, 0.85, n_groups))
+    # ── 颜色方案：tab10 定性色板，每组独立高辨识度颜色，LS 黑色 ──
+    tab10  = plt.cm.tab10.colors
+    colors = [tab10[i % 10] for i in range(n_groups)]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # ── 双子图布局：上图 G1~Gn，下图 LS ────────────────────────────
+    has_ls = "LS" in nav.columns
+    fig, axes = plt.subplots(
+        2, 1, figsize=(12, 8),
+        gridspec_kw={"height_ratios": [3, 1.2]},
+        sharex=True,
+    )
+    ax_grp, ax_ls = axes
 
-    # 分组线
+    # ── 上图：分组累计净值 ──────────────────────────────────────────
     for i, col in enumerate(group_cols):
-        ax.plot(nav.index, nav[col], color=blues[i], linewidth=1.2, label=col)
+        ax_grp.plot(nav.index, nav[col], color=colors[i],
+                    linewidth=1.2, label=col)
 
-    # LS 线（加粗、黑色）
-    if "LS" in nav.columns:
-        ax.plot(nav.index, nav["LS"], color="black", linewidth=2.0,
-                linestyle="--", label="LS (Long-Short)")
+    ax_grp.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
+    ax_grp.set_title(f"{factor_name}  —  Cumulative Group NAV",
+                     fontsize=14, pad=10)
+    ax_grp.set_ylabel("Cumulative NAV (log)", fontsize=10)
+    ax_grp.set_yscale("log")
+    ax_grp.yaxis.set_major_formatter(mticker.FuncFormatter(
+        lambda y, _: f"{y:.1f}" if y < 10 else f"{int(y)}"
+    ))
+    ax_grp.legend(loc="upper left", fontsize=9, framealpha=0.7)
+    ax_grp.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
+
+    # ── 下图：LS 多空组合 ───────────────────────────────────────────
+    if has_ls:
+        ax_ls.plot(nav.index, nav["LS"], color="black", linewidth=1.8,
+                   linestyle="--", label="LS (Long-Short)")
+        ax_ls.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
 
         # 右上角注释：LS 年化收益 + Sharpe
-        ls_ret   = group_ret["LS"].dropna()
-        ann_ret  = ls_ret.mean() * freq
-        ann_vol  = ls_ret.std() * np.sqrt(freq)
-        sharpe   = ann_ret / ann_vol if ann_vol > 0 else np.nan
-        ann_text = f"LS  Ann.Ret={ann_ret*100:.1f}%  Sharpe={sharpe:.2f}"
-        ax.text(0.98, 0.97, ann_text, transform=ax.transAxes,
-                ha="right", va="top", fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7))
+        ls_ret  = group_ret["LS"].dropna()
+        ann_ret = ls_ret.mean() * freq
+        ann_vol = ls_ret.std() * np.sqrt(freq)
+        sharpe  = ann_ret / ann_vol if ann_vol > 0 else np.nan
+        ann_text = f"Ann.Ret={ann_ret*100:.1f}%  Sharpe={sharpe:.2f}"
+        ax_ls.text(0.98, 0.95, ann_text, transform=ax_ls.transAxes,
+                   ha="right", va="top", fontsize=9,
+                   bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7))
 
-    # ── 基准线（净值=1）────────────────────────────────────────────
-    ax.axhline(1.0, color="gray", linewidth=0.8, linestyle=":")
+        ax_ls.set_ylabel("LS NAV", fontsize=10)
+        ax_ls.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+        ax_ls.legend(loc="upper left", fontsize=9, framealpha=0.7)
+        ax_ls.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
+    else:
+        ax_ls.set_visible(False)
 
-    # ── 格式 ────────────────────────────────────────────────────────
-    ax.set_title(f"{factor_name}  —  Cumulative Group NAV", fontsize=14, pad=12)
-    ax.set_xlabel("Date", fontsize=10)
-    ax.set_ylabel("Cumulative NAV", fontsize=10)
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.7)
-    ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
-    fig.tight_layout()
+    ax_ls.set_xlabel("Date", fontsize=10)
+    fig.tight_layout(h_pad=0.5)
 
     # ── 保存 ────────────────────────────────────────────────────────
     out_path = output_dir / f"{factor_name}_nav.png"

@@ -23,9 +23,13 @@ DATABASE_DIR = Path("/Users/louisliu/Mirror/MyProjects/Database/data/stock/A")
 # 行业因子载荷（HDF5，用于行业中性化，来自原始框架）
 INDUSTRY_H5_PATH = ARCHIVE_DATA_DIR / "FactorLoading_Industry_arch.h5"
 
-# 因子计算结果输出目录
-FACTOR_OUTPUT_DIR = PROJECT_ROOT / "factors" / "output"
+# 回测结果输出目录（与 factors/、backtest/ 等模块平级）
+FACTOR_OUTPUT_DIR = PROJECT_ROOT / "output"
 FACTOR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# 图片输出子目录
+IMG_OUTPUT_DIR = FACTOR_OUTPUT_DIR / "img"
+IMG_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # AF-pricing 因子方法参考路径（不复制代码，仅作来源注释）
 AF_PRICING_CODING_DIR = Path("/Users/louisliu/Mirror/MyProjects/AF-pricing/Coding")

@@ -183,6 +183,13 @@ def calc_rolling_icir_weights(
     rolling_std  = ic_df.rolling(window, min_periods=window // 2).std()
     rolling_ir   = rolling_mean / rolling_std.replace(0, np.nan)
 
+    # ── 关键：滞后一期，避免前瞻偏差 ──────────────────────────────
+    # IC_T 使用了 return_{T+1}（下期收益）来计算。
+    # 若用包含 IC_T 的 rolling ICIR 来决定 T 期的因子权重（也是预测 T+1），
+    # 则等于在预测时隐式使用了 return_{T+1} 的信息 → 前瞻偏差。
+    # shift(1) 使得 T 期权重由 IC_{T-12}...IC_{T-1} 决定，完全无前瞻。
+    rolling_ir = rolling_ir.shift(1)
+
     # 负 IR 归零（因子近期无效则不使用）
     rolling_ir = rolling_ir.clip(lower=0)
 
@@ -240,7 +247,7 @@ def combine_factors(
     )
     nan_mask = np.isnan(factor_stack)  # (n_dates, n_stocks, n_factors)
 
-    if weights == "equal":
+    if isinstance(weights, str) and weights == "equal":
         # 等权：nan_mask 处权重为 0，其余均分
         w = np.ones((1, 1, len(names))) / len(names)
         w_broadcast = np.broadcast_to(w, factor_stack.shape).copy().astype(float)
