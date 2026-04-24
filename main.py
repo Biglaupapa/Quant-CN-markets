@@ -28,7 +28,13 @@ from pathlib import Path
 # 确保项目根目录在 Python 路径中
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config.settings import HIST_START, FACTOR_OUTPUT_DIR
+from config.settings import HIST_START, FACTOR_OUTPUT_DIR, IMG_OUTPUT_DIR
+from strategy.combine_factors import (
+    align_factor_directions,
+    calc_rolling_icir_weights,
+    combine_factors,
+    lowdin_orthogonalize,
+)
 from backtest.engine import calc_monthly_returns, group_return
 from backtest.metrics import calc_ic
 from backtest.report import print_factor_report, save_report, plot_nav_curve
@@ -42,6 +48,31 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # 因子计算开关（布林控制）
 # 修改此处的 True/False 控制哪些因子参与计算和回测
 # =============================================================================
+
+# =============================================================================
+# 多因子合成配置
+# =============================================================================
+
+# 各因子 IC 方向（+1 = 正向，-1 = 负向）
+# 负向因子在合成时乘以 -1，使得高分 = 好股票
+FACTOR_DIRECTIONS = {
+    "reversal_20":     -1,   # IC < 0，翻转
+    "momentum_12_1":   -1,   # IC < 0，翻转（虽弱，ICIR权重会自动降低）
+    "turnover_20":     -1,   # IC < 0，翻转
+    "amihud":          +1,   # IC > 0，保持
+    "amihud_zero_adj": +1,   # IC > 0，保持
+    "cs_spread":       -1,   # IC < 0，翻转
+    "roll_spread":     -1,   # IC < 0，翻转
+    "overnight_ret":   +1,   # IC > 0，保持（虽弱，ICIR权重会自动降低）
+    "volatility_30":   -1,   # IC < 0，翻转
+}
+
+MULTI_FACTOR_CONFIG = {
+    "use_orthogonalize": False,  # True = 先做 Lowdin 正交化再合成
+    "icir_window":       12,     # 滚动 ICIR 权重的窗口（月）
+    "run_equal_weight":  True,   # 是否运行等权版本
+    "run_icir_weight":   True,   # 是否运行 ICIR 权重版本
+}
 
 FACTOR_FLAGS = {
     # ── 微观结构因子（活跃，可直接计算）────────────────────────────────────
@@ -276,15 +307,15 @@ def main():
 
             if save_out:
                 save_report(factor_name, grp_ret, ic_series, FACTOR_OUTPUT_DIR, freq=freq)
-                plot_nav_curve(factor_name, grp_ret, FACTOR_OUTPUT_DIR, freq=freq)
+                plot_nav_curve(factor_name, grp_ret, IMG_OUTPUT_DIR, freq=freq)
 
         except Exception as e:
             warnings.warn(f"  ✗ {factor_name} 回测异常：{e}")
             continue
 
-    # --- 步骤 3：汇总 ---
+    # --- 步骤 3：单因子汇总 ---
     print(f"\n{'=' * 60}")
-    print(f"  完成！成功处理 {len(results)}/{len(active_factors)} 个因子")
+    print(f"  单因子完成！成功处理 {len(results)}/{len(active_factors)} 个因子")
     if results:
         ic_means = {
             name: res["ic_series"].mean()
@@ -294,6 +325,84 @@ def main():
         ic_df = pd.Series(ic_means).sort_values(ascending=False)
         print("\n  各因子 RankIC 均值排名：")
         print(ic_df.to_string())
+    print("=" * 60)
+
+    # --- 步骤 4：多因子合成打分回测 ---
+    print(f"\n{'=' * 60}")
+    print("  [Step 4] 多因子合成打分模型")
+    print("=" * 60)
+
+    # 4.1 从结果或缓存中收集所有已激活因子
+    active_directions = {
+        name: FACTOR_DIRECTIONS[name]
+        for name in active_factors
+        if name in FACTOR_DIRECTIONS and name in results
+    }
+    factors_for_combine = {
+        name: results[name]["factor"]
+        for name in active_directions
+    }
+
+    if len(factors_for_combine) < 2:
+        print("  ⚠ 可用因子数不足 2 个，跳过多因子合成")
+        return results
+
+    print(f"\n  参与合成的因子（{len(factors_for_combine)} 个）：{list(factors_for_combine.keys())}")
+
+    # 4.2 方向对齐
+    print("\n  方向对齐...")
+    aligned = align_factor_directions(factors_for_combine, active_directions)
+
+    # 4.3 可选：Lowdin 正交化
+    if MULTI_FACTOR_CONFIG.get("use_orthogonalize", False):
+        print("\n  Lowdin 正交化...")
+        aligned = lowdin_orthogonalize(aligned)
+
+    fwd_ret  = monthly_ret.shift(-1)
+
+    # 4.4 等权合成
+    if MULTI_FACTOR_CONFIG.get("run_equal_weight", True):
+        print("\n" + "─" * 40)
+        print("  多因子合成：等权（Equal Weight）")
+        composite_eq = combine_factors(aligned, weights="equal")
+        grp_ret_eq   = group_return(composite_eq, fwd_ret, n_groups=n_groups)
+        ic_eq        = calc_ic(composite_eq, fwd_ret, method="spearman")
+
+        print_factor_report("multi_factor_equal", grp_ret_eq, ic_eq, freq=freq)
+        if save_out:
+            save_report("multi_factor_equal", grp_ret_eq, ic_eq,
+                        FACTOR_OUTPUT_DIR, freq=freq)
+            plot_nav_curve("multi_factor_equal", grp_ret_eq,
+                           IMG_OUTPUT_DIR, freq=freq)
+
+    # 4.5 ICIR 权重合成
+    if MULTI_FACTOR_CONFIG.get("run_icir_weight", True):
+        print("\n" + "─" * 40)
+        print("  多因子合成：滚动 ICIR 权重")
+        print(f"  滚动窗口：{MULTI_FACTOR_CONFIG['icir_window']} 个月")
+
+        icir_weights = calc_rolling_icir_weights(
+            aligned, monthly_ret,
+            window=MULTI_FACTOR_CONFIG["icir_window"],
+        )
+        print("\n  最新一期各因子权重：")
+        latest_w = icir_weights.dropna(how="all").iloc[-1]
+        for fname, w in latest_w.sort_values(ascending=False).items():
+            print(f"    {fname}: {w:.4f}")
+
+        composite_ir = combine_factors(aligned, weights=icir_weights)
+        grp_ret_ir   = group_return(composite_ir, fwd_ret, n_groups=n_groups)
+        ic_ir        = calc_ic(composite_ir, fwd_ret, method="spearman")
+
+        print_factor_report("multi_factor_icir", grp_ret_ir, ic_ir, freq=freq)
+        if save_out:
+            save_report("multi_factor_icir", grp_ret_ir, ic_ir,
+                        FACTOR_OUTPUT_DIR, freq=freq)
+            plot_nav_curve("multi_factor_icir", grp_ret_ir,
+                           IMG_OUTPUT_DIR, freq=freq)
+
+    print(f"\n{'=' * 60}")
+    print("  多因子合成完成！")
     print("=" * 60)
 
     return results
