@@ -56,15 +56,28 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # 各因子 IC 方向（+1 = 正向，-1 = 负向）
 # 负向因子在合成时乘以 -1，使得高分 = 好股票
 FACTOR_DIRECTIONS = {
-    "reversal_20":     -1,   # IC < 0，翻转
-    "momentum_12_1":   -1,   # IC < 0，翻转（虽弱，ICIR权重会自动降低）
-    "turnover_20":     -1,   # IC < 0，翻转
-    "amihud":          +1,   # IC > 0，保持
-    "amihud_zero_adj": +1,   # IC > 0，保持
-    "cs_spread":       -1,   # IC < 0，翻转
-    "roll_spread":     -1,   # IC < 0，翻转
-    "overnight_ret":   +1,   # IC > 0，保持（虽弱，ICIR权重会自动降低）
-    "volatility_30":   -1,   # IC < 0，翻转
+    # 微观结构（已验证方向）
+    "reversal_20":               -1,   # IC < 0，翻转
+    "momentum_12_1":             -1,   # IC < 0，翻转
+    "turnover_20":               -1,   # IC < 0，翻转
+    "turnover_20_neutral":       -1,   # 同 turnover_20（待验证后确认）
+    "amihud":                    +1,   # IC > 0，保持
+    "amihud_neutral":            +1,   # 同 amihud（待验证后确认）
+    "amihud_zero_adj":           +1,   # IC > 0，保持
+    "amihud_zero_adj_neutral":   +1,   # 同 amihud_zero_adj（待验证后确认）
+    "cs_spread":                 -1,   # IC < 0，翻转
+    "roll_spread":               -1,   # IC < 0，翻转
+    "overnight_ret":             +1,   # IC > 0，保持
+    "volatility_30":             -1,   # IC < 0，翻转
+    # 基本面（待回测后确认方向，暂按经济逻辑设定）
+    "pb":                        -1,   # PB 越低 = 价值股，预期收益正向（低PB好）
+    "bm":                        +1,   # B/M 越高 = 价值股，正向因子
+    "pe_ttm":                    -1,   # PE 越低 = 价值股（低PE好）
+    "pe1":                       -1,   # 同 pe_ttm
+    "dividend_yield":            +1,   # 股息率越高越好
+    "size":                      -1,   # 小市值溢价（小市值好）
+    "size2":                     -1,   # 同 size
+    "net_profit_yoy":            +1,   # 净利润增速越高越好
 }
 
 MULTI_FACTOR_CONFIG = {
@@ -76,39 +89,45 @@ MULTI_FACTOR_CONFIG = {
 
 FACTOR_FLAGS = {
     # ── 微观结构因子（活跃，可直接计算）────────────────────────────────────
-    "reversal_20":       True,    # 短期反转（20日累计收益）
-    "momentum_12_1":     True,    # 中期动量（12-1月）
-    "turnover_20":       True,    # 换手率（20日均，市值中性化）✅ 已验证
-    "amihud":            True,    # Amihud 非流动性（版本A，3月滚动，成交额口径）✅ 已验证
-    "amihud_zero_adj":   True,    # Amihud 零交易日调整版（版本C，log+NT修正）
-    "cs_spread":         True,    # Corwin-Schultz 高低价价差 ✅ 已验证
-    "roll_spread":       True,    # Roll 价差
-    "overnight_ret":     True,    # 隔夜收益率（月均）
-    "volatility_30":     True,    # 短期波动率（30日）
+    "reversal_20":               True,    # 短期反转（20日累计收益）
+    "momentum_12_1":             True,    # 中期动量（12-1月）
+    "turnover_20":               True,    # 换手率（20日均，无中性化）
+    "turnover_20_neutral":       False,   # 换手率（20日均，流通市值中性化）
+    "amihud":                    True,    # Amihud 非流动性（3月滚动，成交额口径，无中性化）
+    "amihud_neutral":            False,   # Amihud 非流动性（3月滚动，流通市值中性化）
+    "amihud_zero_adj":           True,    # Amihud 零交易日调整版（log+NT修正，无中性化）
+    "amihud_zero_adj_neutral":   False,   # Amihud 零交易日调整版（流通市值中性化）
+    "cs_spread":                 True,    # Corwin-Schultz 高低价价差
+    "roll_spread":               True,    # Roll 价差
+    "overnight_ret":             True,    # 隔夜收益率（月均）
+    "volatility_30":             True,    # 短期波动率（30日）
 
     # ── 基本面因子（活跃，可直接计算）──────────────────────────────────────
-    "pb":                False,   # 市净率（市值+行业双重中性化）
-    "pe_ttm":            False,   # 市盈率 TTM（仅 Database 2021+）
-    "dividend_yield":    False,   # 股息率 TTM（仅 Database 2021+）
-    "size":              False,   # 市值因子 log(流通市值)
-    "net_profit_yoy":    False,   # 净利润同比增速（市值+行业双重中性化）
+    "pb":                        False,   # 市净率（无中性化）
+    "bm":                        False,   # 账面市值比 log(1/PB)（无中性化，正向因子）
+    "pe_ttm":                    False,   # 市盈率 TTM（无中性化）
+    "pe1":                       False,   # 动态市盈率（无中性化）
+    "dividend_yield":            False,   # 股息率 TTM（无中性化）
+    "size":                      False,   # log(总市值)（无中性化）
+    "size2":                     False,   # log(流通市值)（无中性化）
+    "net_profit_yoy":            False,   # 净利润同比增速（流通市值+行业双重中性化）
 
     # ── 待激活因子（需补充数据后将 False 改为 True）─────────────────────────
     # [需补充数据] marketrtn_daily.csv（日度市场收益率序列）
-    "ps_gamma":          False,  # Pastor-Stambaugh Gamma
+    "ps_gamma":                  False,   # Pastor-Stambaugh Gamma
 
     # [需补充数据] ps_gamma 先激活 + marketrtn_daily.csv
-    "ps_liq_beta":       False,  # PS 流动性 Beta（36月滚动）
+    "ps_liq_beta":               False,   # PS 流动性 Beta（36月滚动）
 
     # [需补充数据] marketvalue.csv（日度流通市值序列）+ amt.csv（已有）
-    "ap_betas":          False,  # Acharya-Pedersen β1-β5
+    "ap_betas":                  False,   # Acharya-Pedersen β1-β5
 
     # [需补充数据] marketrtn_daily.csv
-    "capm_beta":         False,  # CAPM 市场 Beta（240日滚动）
+    "capm_beta":                 False,   # CAPM 市场 Beta（240日滚动）
 
     # [需补充数据] FF3 日度因子（RiskPremium/HML/SMB）+ rf_daily.csv
-    "ivol":              False,  # 特质波动率（FF3 残差年化标准差）
-    "ff3_betas":         False,  # FF3 三因子 Beta
+    "ivol":                      False,   # 特质波动率（FF3 残差年化标准差）
+    "ff3_betas":                 False,   # FF3 三因子 Beta
 }
 
 # =============================================================================
@@ -117,17 +136,16 @@ FACTOR_FLAGS = {
 # 可用数据范围参考：
 #   存档（_archive/raw_data）：2014-01-01 ~ 2021-03-31
 #     包含：后复权价格、换手率、PB、流通股本、ST标记、交易状态、上市天数
-#   Database（/Mirror/MyProjects/Database）：2003-01-02 ~ 至今
-#     包含：OHLCV、换手率、成交额（PE/PB/股息率仅6天快照，暂不可用）
+#   Database（/Mirror/MyProjects/Database）：2004-01-02 ~ 至今
+#     包含：OHLCV、换手率、成交额、PE/PB/市值/股息率等全量指标
 #
 # 常用区间：
+#   主回测   "2007-01-01" ~ None（全因子统一起点，PB/PE 数据可信度较好）
 #   近十年   "2014-01-01" ~ "2024-12-31"（存档+Database 双源覆盖）
-#   Database 全程   "2003-01-01" ~ None（仅 OHLCV 类因子可用）
-#   仅存档   "2014-01-01" ~ "2021-03-31"（后复权价格因子全量可用）
 # =============================================================================
 
-BACKTEST_START = "2004-01-01"   # ← 修改起始日期
-#   数据限制：free_float_shares 从 2004-01-02 起，是所有字段中最晚的起点
+BACKTEST_START = "2007-01-01"   # ← 修改起始日期
+#   选择 2007 起：2007 前 A 股市场规模小，PB/PE 数据可信度偏低，各因子统一对齐
 
 # 截止日期：自动取上一个完整月末
 #   逻辑：当月数据不完整，只用已完整收盘的月份
@@ -158,41 +176,51 @@ BACKTEST_CONFIG = {
 def _get_factor_func(factor_name: str):
     """根据因子名称返回对应的计算函数。"""
     from factors.microstructure import (
-        calc_reversal_20, calc_momentum_12_1, calc_turnover_20,
-        calc_amihud, calc_amihud_zero_adj, calc_cs_spread,
-        calc_roll_spread, calc_overnight_ret, calc_volatility_30,
+        calc_reversal_20, calc_momentum_12_1,
+        calc_turnover_20, calc_turnover_20_neutral,
+        calc_amihud, calc_amihud_neutral,
+        calc_amihud_zero_adj, calc_amihud_zero_adj_neutral,
+        calc_cs_spread, calc_roll_spread,
+        calc_overnight_ret, calc_volatility_30,
         _calc_ps_gamma, _calc_ps_liq_beta, _calc_ap_betas,
         _calc_capm_beta, _calc_ivol, _calc_ff3_betas,
     )
     from factors.fundamental import (
-        calc_pb, calc_pe_ttm, calc_dividend_yield,
-        calc_size, calc_net_profit_yoy,
+        calc_pb, calc_bm, calc_pe_ttm, calc_pe1,
+        calc_dividend_yield, calc_size, calc_size2, calc_net_profit_yoy,
     )
 
     mapping = {
-        # 微观结构
-        "reversal_20":     calc_reversal_20,
-        "momentum_12_1":   calc_momentum_12_1,
-        "turnover_20":     calc_turnover_20,
-        "amihud":          calc_amihud,
-        "amihud_zero_adj": calc_amihud_zero_adj,
-        "cs_spread":       calc_cs_spread,
-        "roll_spread":     calc_roll_spread,
-        "overnight_ret":   calc_overnight_ret,
-        "volatility_30":   calc_volatility_30,
+        # 微观结构（无中性化）
+        "reversal_20":               calc_reversal_20,
+        "momentum_12_1":             calc_momentum_12_1,
+        "turnover_20":               calc_turnover_20,
+        "amihud":                    calc_amihud,
+        "amihud_zero_adj":           calc_amihud_zero_adj,
+        "cs_spread":                 calc_cs_spread,
+        "roll_spread":               calc_roll_spread,
+        "overnight_ret":             calc_overnight_ret,
+        "volatility_30":             calc_volatility_30,
+        # 微观结构（流通市值中性化）
+        "turnover_20_neutral":       calc_turnover_20_neutral,
+        "amihud_neutral":            calc_amihud_neutral,
+        "amihud_zero_adj_neutral":   calc_amihud_zero_adj_neutral,
         # 待激活
-        "ps_gamma":        _calc_ps_gamma,
-        "ps_liq_beta":     _calc_ps_liq_beta,
-        "ap_betas":        _calc_ap_betas,
-        "capm_beta":       _calc_capm_beta,
-        "ivol":            _calc_ivol,
-        "ff3_betas":       _calc_ff3_betas,
+        "ps_gamma":                  _calc_ps_gamma,
+        "ps_liq_beta":               _calc_ps_liq_beta,
+        "ap_betas":                  _calc_ap_betas,
+        "capm_beta":                 _calc_capm_beta,
+        "ivol":                      _calc_ivol,
+        "ff3_betas":                 _calc_ff3_betas,
         # 基本面
-        "pb":              calc_pb,
-        "pe_ttm":          calc_pe_ttm,
-        "dividend_yield":  calc_dividend_yield,
-        "size":            calc_size,
-        "net_profit_yoy":  calc_net_profit_yoy,
+        "pb":                        calc_pb,
+        "bm":                        calc_bm,
+        "pe_ttm":                    calc_pe_ttm,
+        "pe1":                       calc_pe1,
+        "dividend_yield":            calc_dividend_yield,
+        "size":                      calc_size,
+        "size2":                     calc_size2,
+        "net_profit_yoy":            calc_net_profit_yoy,
     }
     return mapping.get(factor_name)
 

@@ -5,15 +5,18 @@
 # 包含所有价格/成交量衍生的市场微观结构信号，分两组：
 #
 # ── 活跃因子（可直接计算）─────────────────────────────────────────────────
-#   reversal_20      短期反转（20日累计收益）
-#   momentum_12_1    中期动量（12-1月，跳过最近1月）
-#   turnover_20      换手率（20日均值，市值中性化）
-#   amihud           Amihud 非流动性（3月滚动，成交额口径）
-#   amihud_zero_adj  Amihud 零交易日调整版（log变换+NT修正）
-#   cs_spread        Corwin-Schultz 高低价价差
-#   roll_spread      Roll 价差（相邻收益率协方差）
-#   overnight_ret    隔夜收益率（月均）
-#   volatility_30    短期波动率（30日，月末取值）
+#   reversal_20              短期反转（20日累计收益）
+#   momentum_12_1            中期动量（12-1月，跳过最近1月）
+#   turnover_20              换手率（20日均值，无中性化）
+#   turnover_20_neutral      换手率（20日均值，流通市值中性化）
+#   amihud                   Amihud 非流动性（3月滚动，成交额口径，无中性化）
+#   amihud_neutral           Amihud 非流动性（3月滚动，流通市值中性化）
+#   amihud_zero_adj          Amihud 零交易日调整版（log+NT修正，无中性化）
+#   amihud_zero_adj_neutral  Amihud 零交易日调整版（log+NT修正，流通市值中性化）
+#   cs_spread                Corwin-Schultz 高低价价差
+#   roll_spread              Roll 价差（相邻收益率协方差）
+#   overnight_ret            隔夜收益率（月均）
+#   volatility_30            短期波动率（30日，月末取值）
 #
 # ── 待激活因子（需额外数据，暂注释掉调用）────────────────────────────────
 #   ps_gamma         Pastor-Stambaugh Gamma（需市场收益率日序列）
@@ -50,7 +53,6 @@ from config.settings import (
     ILLIQ_SCALE,
     VOLATILITY_WINDOW,
     MIN_ROLLING_VALID_DAYS,
-    TURN_NEUTRALIZE_SIZE,
     USE_ADJ_PRICE,
     # 待激活因子参数（暂不调用）
     CAPM_BETA_WINDOW,
@@ -60,6 +62,7 @@ from config.settings import (
     AP_BETA_WINDOW_MONTHS,
     AP_C1, AP_C2, AP_C3,
 )
+from factors.fundamental import _get_log_mktcap
 
 # 价格字段选择（由 settings.USE_ADJ_PRICE 控制）
 # 修改 settings.py 中的 USE_ADJ_PRICE 即可全局切换，无需逐函数修改
@@ -139,100 +142,109 @@ def calc_momentum_12_1(
 
 
 # -----------------------------------------------------------------------------
-# 3. 换手率因子（20日均值，市值中性化）
-#    来源：[orig] 因子框架.py（保留市值中性化）
+# 3. 换手率因子（20日均值）
+#    来源：[orig] 因子框架.py
+#
+#    两个版本：
+#      turnover_20         无中性化（原始信号）
+#      turnover_20_neutral 流通市值中性化（neg_market_value，Datayes）
 # -----------------------------------------------------------------------------
+
+def _calc_turnover_20_raw(
+    start: Optional[str],
+    end: Optional[str],
+) -> tuple:
+    """内部辅助：返回 (factor_m, mask)，供两个版本共用。"""
+    data = load_data(["turn"], start=start, end=end)
+    turn = data.get("turn")
+
+    if turn is None:
+        warnings.warn("[microstructure] calc_turnover_20: 换手率数据加载失败，跳过")
+        return None, None
+
+    mask = build_investable_mask(start=start, end=end, freq="D")
+    turn = apply_universe(turn, mask)
+
+    valid_count = turn.rolling(window=TURNOVER_WINDOW).count()
+    turn[valid_count < MIN_ROLLING_VALID_DAYS] = np.nan
+
+    turn20   = turn.rolling(window=TURNOVER_WINDOW).mean()
+    factor_m = to_monthly(turn20, method="last")
+    return factor_m, mask
+
+
 def calc_turnover_20(
     start: Optional[str] = None,
     end: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    换手率因子：过去 TURNOVER_WINDOW 个交易日的平均换手率。
-    经用户确认：做市值中性化（剔除换手率与市值规模的线性相关）。
-
-    市值中性化变量：log(不复权收盘价 × 流通股本)
+    换手率因子（无中性化）：过去 TURNOVER_WINDOW 个交易日的平均换手率，月末取值。
+    数据：turn [db]
     """
-    data = load_data(["turn", "close", "float_shares"], start=start, end=end)
-    turn         = data.get("turn")
-    close_unadj  = data.get("close")
-    float_shares = data.get("float_shares")
+    factor_m, _ = _calc_turnover_20_raw(start, end)
+    if factor_m is None:
+        return pd.DataFrame()
+    return preprocess(factor_m)
 
-    if turn is None:
-        warnings.warn("[microstructure] calc_turnover_20: 换手率数据加载失败，跳过")
+
+def calc_turnover_20_neutral(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    换手率因子（流通市值中性化）：剔除换手率与 log(流通市值) 的线性相关后取残差。
+    中性化变量：neg_market_value（Datayes，2004+）
+    数据：turn [db] + neg_market_value [db]
+    """
+    factor_m, mask = _calc_turnover_20_raw(start, end)
+    if factor_m is None:
         return pd.DataFrame()
 
-    mask = build_investable_mask(start=start, end=end, freq="D")
-    turn = apply_universe(turn, mask)
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+    if log_mktcap is None:
+        warnings.warn("[microstructure] calc_turnover_20_neutral: 无法获取流通市值，退化为无中性化版本")
+        return preprocess(factor_m)
 
-    # 滚动窗口有效数据检查
-    valid_count = turn.rolling(window=TURNOVER_WINDOW).count()
-    turn[valid_count < MIN_ROLLING_VALID_DAYS] = np.nan
-
-    # 20日均换手率 → 月末采样
-    turn20 = turn.rolling(window=TURNOVER_WINDOW).mean()
-    factor_m = to_monthly(turn20, method="last")
-
-    # 市值中性化（仅 Turnover 使用，经用户确认）
-    if TURN_NEUTRALIZE_SIZE and close_unadj is not None and float_shares is not None:
-        close_m  = to_monthly(apply_universe(close_unadj, mask), method="last")
-        float_m  = to_monthly(apply_universe(float_shares, mask), method="last")
-        mktcap_m = (close_m * float_m).replace(0, np.nan)
-        log_mktcap = np.log(mktcap_m)
-        return preprocess(factor_m, neutralize="size", log_mktcap=log_mktcap)
-
-    return preprocess(factor_m)
+    return preprocess(factor_m, neutralize="size", log_mktcap=log_mktcap)
 
 
 # -----------------------------------------------------------------------------
 # 4. Amihud 非流动性因子（版本A：3月滚动，成交额口径）
 #    来源：[af] factorcal.py FactorAmihud
+#
+#    两个版本：
+#      amihud         无中性化（原始信号）
+#      amihud_neutral 流通市值中性化（neg_market_value，Datayes）
 # -----------------------------------------------------------------------------
-def calc_amihud(
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Amihud (2002) 非流动性因子（版本A）：
-        ILLIQ_{i,t} = mean(|R_{i,d}| / Amount_{i,d}) × ILLIQ_SCALE
-    其中 d 取过去 3 个月的日度数据，滞后 1 个月以避免前瞻偏差。
 
-    数据：
-        close_adj → 计算日度收益率 |R|      [db]
-        amt       → 成交额（元）→ 内部换算为百万元  [db]
-                    ILLIQ_SCALE = 1e5，结合百万元单位使数值在合理范围
-
-    覆盖：2003-01-02 至今，6077 只股票。
-    因子方向：ILLIQ 越大 = 流动性越差；G1=流动性最好，G5=流动性最差。
-    """
+def _calc_amihud_factor(
+    start: Optional[str],
+    end: Optional[str],
+) -> tuple:
+    """内部辅助：返回 (factor, mask)，供两个版本共用。"""
     data = load_data(["close_adj", "amt"], start=start, end=end)
     close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
     amt   = data.get("amt")
 
     if close is None or amt is None:
         warnings.warn("[microstructure] calc_amihud: 缺少 close 或 amt 数据")
-        return pd.DataFrame()
+        return None, None
 
     mask = build_investable_mask(start=start, end=end, freq="D")
     close = apply_universe(close, mask)
     amt   = apply_universe(amt, mask)
 
-    # 日度绝对收益率
-    abs_ret = (close / close.shift(1) - 1).abs()
-    # 成交额换算为百万元，零值替换为 NaN（避免除零）
+    abs_ret      = (close / close.shift(1) - 1).abs()
     amt_millions = (amt / 1e6).replace(0, np.nan)
+    daily_illiq  = abs_ret / amt_millions * ILLIQ_SCALE
 
-    # 日度 Amihud 值：|R| / 成交额(百万元) × 缩放系数
-    daily_illiq = abs_ret / amt_millions * ILLIQ_SCALE
-
-    # 月度分组计算（3个月滚动）
     daily_illiq.index = pd.to_datetime(daily_illiq.index)
-    monthly_groups = daily_illiq.resample("ME")
 
     frames = []
     dates  = []
-    buffer = []  # 存储最近 N 个月的日度数据
+    buffer = []
 
-    for period_end, group in monthly_groups:
+    for period_end, group in daily_illiq.resample("ME"):
         buffer.append(group)
         if len(buffer) > AMIHUD_WINDOW_MONTHS:
             buffer.pop(0)
@@ -248,46 +260,80 @@ def calc_amihud(
         dates.append(period_end)
 
     if not frames:
-        return pd.DataFrame()
+        return None, None
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
-    # 滞后 AMIHUD_LAG_MONTHS 个月（避免前瞻偏差）
     factor = factor.shift(AMIHUD_LAG_MONTHS)
+    return factor, mask
 
+
+def calc_amihud(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Amihud (2002) 非流动性因子（无中性化）：
+        ILLIQ_{i,t} = mean(|R_{i,d}| / Amount_{i,d}) × ILLIQ_SCALE
+    其中 d 取过去 3 个月的日度数据，滞后 1 个月以避免前瞻偏差。
+
+    数据：close_adj, amt [db]
+    因子方向：ILLIQ 越大 = 流动性越差。
+    """
+    factor, _ = _calc_amihud_factor(start, end)
+    if factor is None:
+        return pd.DataFrame()
     return preprocess(factor)
+
+
+def calc_amihud_neutral(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Amihud 非流动性因子（流通市值中性化）：剔除与 log(流通市值) 的线性相关后取残差。
+    中性化变量：neg_market_value（Datayes，2004+）
+    数据：close_adj, amt [db] + neg_market_value [db]
+    """
+    factor, mask = _calc_amihud_factor(start, end)
+    if factor is None:
+        return pd.DataFrame()
+
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+    if log_mktcap is None:
+        warnings.warn("[microstructure] calc_amihud_neutral: 无法获取流通市值，退化为无中性化版本")
+        return preprocess(factor)
+
+    return preprocess(factor, neutralize="size", log_mktcap=log_mktcap)
 
 
 # -----------------------------------------------------------------------------
 # 5. Amihud 零交易日调整版（版本C：log + NT 修正）
 #    来源：[iref] IREF-sentiment/code/Data Processing.py
+#
+#    两个版本：
+#      amihud_zero_adj         无中性化（原始信号）
+#      amihud_zero_adj_neutral 流通市值中性化（neg_market_value，Datayes）
 # -----------------------------------------------------------------------------
-def calc_amihud_zero_adj(
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-) -> pd.DataFrame:
-    """
-    Amihud 零交易日调整版（版本C）：
-        ILLIQ_ZA = ln(mean(|R| / Volume)) × (NT + 1)
-    其中 NT 为当月零交易日占比，该修正使零流动性日期对结果有更大惩罚。
 
-    数据：
-        close   → 日度收益率    [db]/[arch]
-        volume  → 成交量（股数）[db]
-    """
+def _calc_amihud_zero_adj_factor(
+    start: Optional[str],
+    end: Optional[str],
+) -> tuple:
+    """内部辅助：返回 (factor, mask)，供两个版本共用。"""
     data = load_data([_CLOSE, "volume"], start=start, end=end)
     close  = data.get(_CLOSE)
     volume = data.get("volume")
 
     if close is None or volume is None:
         warnings.warn("[microstructure] calc_amihud_zero_adj: 缺少 close 或 volume 数据")
-        return pd.DataFrame()
+        return None, None
 
     mask = build_investable_mask(start=start, end=end, freq="D")
     close  = apply_universe(close, mask)
     volume = apply_universe(volume, mask)
 
-    abs_ret    = (close / close.shift(1) - 1).abs()
-    vol_clean  = volume.replace(0, np.nan)
+    abs_ret     = (close / close.shift(1) - 1).abs()
+    vol_clean   = volume.replace(0, np.nan)
     daily_illiq = abs_ret / vol_clean
 
     frames = []
@@ -298,13 +344,11 @@ def calc_amihud_zero_adj(
         if n_total == 0:
             continue
 
-        # 零交易日占比
         nt = (volume.reindex(group.index) == 0).sum() / n_total
 
         mean_illiq = group.mean()
         mean_illiq = mean_illiq.replace([np.inf, -np.inf], np.nan)
 
-        # log 变换 + 零交易日修正
         log_illiq = np.log(mean_illiq.clip(lower=1e-15))
         adjusted  = log_illiq * (nt + 1)
 
@@ -312,11 +356,48 @@ def calc_amihud_zero_adj(
         dates.append(period_end)
 
     if not frames:
-        return pd.DataFrame()
+        return None, None
 
     factor = pd.DataFrame(frames, index=pd.DatetimeIndex(dates))
+    return factor, mask
 
+
+def calc_amihud_zero_adj(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Amihud 零交易日调整版（无中性化）：
+        ILLIQ_ZA = ln(mean(|R| / Volume)) × (NT + 1)
+    其中 NT 为当月零交易日占比。
+
+    数据：close, volume [db]
+    """
+    factor, _ = _calc_amihud_zero_adj_factor(start, end)
+    if factor is None:
+        return pd.DataFrame()
     return preprocess(factor)
+
+
+def calc_amihud_zero_adj_neutral(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Amihud 零交易日调整版（流通市值中性化）：剔除与 log(流通市值) 的线性相关后取残差。
+    中性化变量：neg_market_value（Datayes，2004+）
+    数据：close, volume [db] + neg_market_value [db]
+    """
+    factor, mask = _calc_amihud_zero_adj_factor(start, end)
+    if factor is None:
+        return pd.DataFrame()
+
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+    if log_mktcap is None:
+        warnings.warn("[microstructure] calc_amihud_zero_adj_neutral: 无法获取流通市值，退化为无中性化版本")
+        return preprocess(factor)
+
+    return preprocess(factor, neutralize="size", log_mktcap=log_mktcap)
 
 
 # -----------------------------------------------------------------------------
