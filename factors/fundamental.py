@@ -5,14 +5,18 @@
 # 包含所有财报/估值衍生的基本面信号：
 #
 #   pb               市净率（月末截面，行业+市值双重中性化）
-#   pe_ttm           市盈率 TTM（月末截面，无中性化）
-#   dividend_yield   股息率 TTM（月末截面，无中性化）
-#   size             市值因子 log(流通市值)（月末截面，无中性化）
+#   pe_ttm           市盈率 TTM（静态，月末截面，无中性化）
+#   pe1              动态市盈率（滚动12个月预测，月末截面，无中性化）
+#   dividend_yield   股息率（近12个月，月末截面，无中性化）
+#   size             市值因子 log(总市值)（月末截面，无中性化）
+#                    → 数据源：market_value（Datayes 2022+），降级回退至 close×float_shares
+#   size2            流通市值因子 log(流通市值)（月末截面，无中性化）
+#                    → 数据源：neg_market_value（Datayes 2022+），降级同上
 #   net_profit_yoy   净利润同比增速（季度，滞后3个季度，行业+市值双重中性化）
 #
 # 中性化说明（经用户确认）：
 #   PB 和 NetProfit_YoY 做市值+行业双重中性化（延续 因子框架.py 做法）
-#   PE、Dividend Yield、SIZE 暂不做中性化
+#   PE、PE1、Dividend Yield、SIZE、SIZE2 暂不做中性化
 #
 # 数据来源标注：
 #   [arch]   来自 _archive/raw_data/ 历史 CSV（2014-2020）
@@ -38,31 +42,47 @@ from config.settings import (
 
 
 # -----------------------------------------------------------------------------
-# 辅助：构建 log(流通市值) 用于中性化
+# 辅助：构建 log(市值) 用于中性化与 Size 因子
 # -----------------------------------------------------------------------------
 
 def _get_log_mktcap(
     start: Optional[str],
     end: Optional[str],
     mask: pd.DataFrame,
+    use_field: str = "market_value",
 ) -> Optional[pd.DataFrame]:
     """
-    计算月度 log(流通市值) = log(不复权收盘价 × 流通股本)。
-    用于市值中性化。
+    计算月度 log(市值)，优先使用 Datayes 直接提供的市值字段。
+
+    优先顺序（自动降级）：
+      1. market_value / neg_market_value（Datayes，2022起，精确）
+      2. close × float_shares（全历史，用于 2022 前的存档回测区间）
+
+    Args:
+        use_field: "market_value"（总市值，默认，用于 Size）
+                   "neg_market_value"（流通市值，用于 Size2 及市值中性化）
     """
-    data = load_data(["close", "float_shares"], start=start, end=end)
+    data = load_data([use_field, "close", "float_shares"], start=start, end=end)
+
+    # 优先：直接市值字段（Datayes 2022+）
+    mv = data.get(use_field)
+    if mv is not None and not mv.empty:
+        mv_m = to_monthly(apply_universe(mv, mask), method="last").replace(0, np.nan)
+        if mv_m.notna().any().any():
+            return np.log(mv_m)
+
+    # 降级：手工计算（存档历史区间 2014-2021）
     close        = data.get("close")
     float_shares = data.get("float_shares")
-
     if close is None or float_shares is None:
-        warnings.warn("[fundamental] 无法获取市值数据（close 或 float_shares 缺失）。")
+        warnings.warn(
+            f"[fundamental] 无法获取市值数据：{use_field} 为空，"
+            "且 close/float_shares 也缺失。"
+        )
         return None
-
     close_m        = to_monthly(apply_universe(close, mask),        method="last")
     float_shares_m = to_monthly(apply_universe(float_shares, mask), method="last")
-
-    mktcap = (close_m * float_shares_m).replace(0, np.nan)
-    return np.log(mktcap)
+    return np.log((close_m * float_shares_m).replace(0, np.nan))
 
 
 # -----------------------------------------------------------------------------
@@ -148,7 +168,41 @@ def calc_pe_ttm(
 
 
 # -----------------------------------------------------------------------------
-# 3. 股息率因子（Dividend Yield TTM）
+# 3. 动态市盈率因子（PE1）
+#    来源：[db] pe1.csv（Datayes getMktEqud.PE1）
+# -----------------------------------------------------------------------------
+
+def calc_pe1(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    动态市盈率因子（PE1）：月末截面值，越小代表估值越低。
+
+    PE1 与 pe_ttm（PE）的区别：
+      PE  = 总市值 / 最近一年报告期净利润（静态，基于已披露年报）
+      PE1 = 总市值 / 滚动12个月盈利（动态，含最新季报，更及时）
+
+    处理：负值（亏损公司）置为 NaN，无中性化。
+
+    数据：pe1 [db: pe1.csv]（Datayes 2022+）
+    """
+    data = load_data(["pe1"], start=start, end=end)
+    pe1 = data.get("pe1")
+
+    if pe1 is None:
+        warnings.warn("[fundamental] calc_pe1: 缺少 pe1 数据（仅 Database 2022+ 可用）")
+        return pd.DataFrame()
+
+    mask  = build_investable_mask(start=start, end=end, freq="D")
+    pe1_m = to_monthly(apply_universe(pe1, mask), method="last")
+    pe1_m[pe1_m <= 0] = np.nan
+
+    return preprocess(pe1_m)
+
+
+# -----------------------------------------------------------------------------
+# 4. 股息率因子（Dividend Yield）
 #    来源：[db] dividend_ratio.csv
 # -----------------------------------------------------------------------------
 
@@ -177,8 +231,8 @@ def calc_dividend_yield(
 
 
 # -----------------------------------------------------------------------------
-# 4. 市值因子（SIZE）
-#    来源：[af] factorcal.py FactorSIZE + [arch] close.csv & float_shares.csv
+# 4. 市值因子（SIZE）— 总市值
+#    数据：market_value（Datayes getMktDivYield，2022+），降级回退 close×float_shares
 # -----------------------------------------------------------------------------
 
 def calc_size(
@@ -186,21 +240,49 @@ def calc_size(
     end: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    市值因子：log(流通市值) = log(不复权收盘价 × 流通股本)，月末取值。
+    Size 因子：log(总市值)，月末取值。
     市值越小，因子值越小（通常小盘股有超额收益）。
-    暂不做中性化（市值因子本身是中性化的控制变量，不宜再自我中性化）。
+    不做中性化（市值因子本身是中性化的控制变量，不宜自我中性化）。
 
-    数据：close [arch]/[db]，float_shares [arch: 流通股本.csv]
-    来源：[af] factorcal.py FactorSIZE
+    数据优先级：
+      1. market_value（Datayes getMktDivYield，精确，2022起）
+      2. close × float_shares（全历史降级，用于 2022 前存档区间）
     """
     mask = build_investable_mask(start=start, end=end, freq="D")
-    log_mktcap = _get_log_mktcap(start, end, mask)
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="market_value")
 
     if log_mktcap is None:
-        warnings.warn("[fundamental] calc_size: 无法计算 log(流通市值)")
+        warnings.warn("[fundamental] calc_size: 无法计算 log(总市值)")
         return pd.DataFrame()
 
-    # SIZE 不做中性化，仅去极值和标准化
+    return preprocess(log_mktcap, neutralize=None)
+
+
+# -----------------------------------------------------------------------------
+# 5. 流通市值因子（SIZE2）— 流通市值
+#    数据：neg_market_value（Datayes getMktEqud，2022+），降级回退 close×float_shares
+# -----------------------------------------------------------------------------
+
+def calc_size2(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Size2 因子：log(流通市值)，月末取值。
+    与 Size（总市值）的差异体现在限售股比例较高的个股上。
+    不做中性化。
+
+    数据优先级：
+      1. neg_market_value（Datayes getMktEqud，精确，2022起）
+      2. close × float_shares（全历史降级，用于 2022 前存档区间）
+    """
+    mask = build_investable_mask(start=start, end=end, freq="D")
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+
+    if log_mktcap is None:
+        warnings.warn("[fundamental] calc_size2: 无法计算 log(流通市值)")
+        return pd.DataFrame()
+
     return preprocess(log_mktcap, neutralize=None)
 
 

@@ -70,16 +70,20 @@ DATABASE_FIELD_MAP = {
     "volume":          "volume.csv",
     "amt":             "amt.csv",
     "turn":            "turn.csv",
-    # 基本面（快照）
-    "pe_ttm":          "pe_ttm.csv",
-    "pb":              "pb.csv",
-    "dividend_ratio":  "dividend_ratio.csv",
+    # 基本面估值（快照）
+    "pe_ttm":           "pe_ttm.csv",           # 市盈率 TTM（静态，基于最新年报）
+    "pe1":              "pe1.csv",              # 动态市盈率（滚动12个月盈利预测）
+    "pb":               "pb.csv",               # 市净率
+    "dividend_ratio":   "dividend_ratio.csv",   # 股息率（近12个月，%）
+    # 市值
+    "market_value":     "market_value.csv",     # 总市值（元）→ Size 因子
+    "neg_market_value": "neg_market_value.csv", # 流通市值（元）→ Size2 因子
     # 股票池过滤（原为存档专属，现已补入 Database）
     # Database 中字段名与存档不同，此处统一映射
-    "is_st":           "st.csv",               # 1=ST，0=正常
-    "trade_status":    "status.csv",           # 1=正常交易，0=停牌（与存档字符串格式不同）
-    "listing_days":    "listed_days.csv",      # 上市至今交易日数
-    "float_shares":    "free_float_shares.csv", # 流通股本（股）
+    "is_st":            "st.csv",               # 1=ST，0=正常
+    "trade_status":     "status.csv",           # 1=正常交易，0=停牌（与存档字符串格式不同）
+    "listing_days":     "listed_days.csv",      # 上市至今交易日数
+    "float_shares":     "free_float_shares.csv", # 流通股本（股）
 }
 
 # -----------------------------------------------------------------------------
