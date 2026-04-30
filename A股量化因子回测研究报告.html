@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股量化因子回测研究报告</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "PingFang SC","Hiragino Sans GB","Microsoft YaHei","微软雅黑",
+               "Helvetica Neue",Arial,sans-serif;
+  font-size: 15px; line-height: 1.7; color: #1a252f; background: #f5f7fa;
+}
+.page { max-width: 980px; margin: 0 auto; padding: 0 24px 60px; }
+
+/* 封面 */
+.cover {
+  background: linear-gradient(135deg,#1e3a5f 0%,#0d2137 100%);
+  color:#fff; padding:52px 52px 44px; margin-bottom:40px; border-radius:4px;
+}
+.cover h1 { font-size:34px; font-weight:700; letter-spacing:.5px; margin-bottom:10px; line-height:1.3; }
+.cover .subtitle { font-size:15px; color:#cadcfc; margin-bottom:24px; }
+.cover-divider { width:64px; height:3px; background:#1abc9c; margin-bottom:22px; border-radius:2px; }
+.cover-meta { font-size:13px; color:#94a3b8; line-height:2; }
+.cover-stats { display:flex; gap:16px; margin-top:30px; flex-wrap:wrap; }
+.stat-card { background:rgba(255,255,255,.1); border-radius:6px; padding:14px 24px; text-align:center; min-width:110px; }
+.stat-card .num { font-size:32px; font-weight:700; color:#f3e55a; display:block; line-height:1.1; }
+.stat-card .label { font-size:11px; color:#cadcfc; margin-top:3px; }
+
+/* 章节标题 */
+h2 { font-size:21px; font-weight:700; color:#1e3a5f; padding:10px 0 10px 16px;
+      border-left:5px solid #2e86c1; margin:44px 0 18px; background:#f0f4f8; }
+h3 { font-size:15px; font-weight:700; color:#2e86c1; margin:26px 0 8px;
+      padding-bottom:5px; border-bottom:1px solid #e2e8f0; }
+p  { margin-bottom:12px; color:#334155; }
+.note { font-size:12px; color:#94a3b8; font-style:italic; margin-top:6px; }
+
+/* 表格 */
+.table-wrap { overflow-x:auto; margin:14px 0 6px; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+table { width:100%; border-collapse:collapse; font-size:13px; background:#fff; }
+thead tr { background:#1e3a5f; color:#fff; }
+thead th { padding:10px 12px; text-align:center; font-weight:600; white-space:nowrap; }
+tbody tr:nth-child(odd)  { background:#f8fafd; }
+tbody tr:nth-child(even) { background:#fff; }
+tbody tr:hover { background:#eef4fb; }
+tbody td { padding:9px 12px; text-align:center; border-bottom:1px solid #e8edf3; white-space:nowrap; }
+tbody td.left  { text-align:left; }
+tbody td.muted { color:#94a3b8; font-size:12px; }
+.val-pos { color:#16a34a; font-weight:600; }
+.val-neg { color:#dc2626; font-weight:600; }
+.badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; }
+.badge-strong { background:#dcfce7; color:#166534; }
+.badge-mid    { background:#dbeafe; color:#1d4ed8; }
+.badge-weak   { background:#fef9c3; color:#854d0e; }
+.badge-faint  { background:#f1f5f9; color:#94a3b8; }
+
+/* 卡片 */
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin:18px 0; }
+.card { border-radius:6px; padding:18px; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.07);
+         border-top:4px solid #2e86c1; }
+.card.teal { border-top-color:#1abc9c; }
+.card.navy { border-top-color:#1e3a5f; }
+.card.gold { border-top-color:#d97706; }
+.card h4 { font-size:13px; font-weight:700; color:#1e3a5f; margin-bottom:8px; }
+.card p  { font-size:12.5px; color:#475569; margin:0; }
+
+/* 步骤 */
+.steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:18px 0; }
+.step { background:#fff; border-radius:6px; padding:18px; box-shadow:0 1px 4px rgba(0,0,0,.07); }
+.step-num { width:30px; height:30px; border-radius:50%; display:flex; align-items:center;
+             justify-content:center; font-weight:700; font-size:14px; color:#fff; margin-bottom:10px; }
+.step:nth-child(1) .step-num { background:#2e86c1; }
+.step:nth-child(2) .step-num { background:#1abc9c; }
+.step:nth-child(3) .step-num { background:#1e3a5f; }
+.step:nth-child(4) .step-num { background:#2e86c1; }
+.step h4 { font-size:13px; font-weight:700; color:#1e3a5f; margin-bottom:6px; }
+.step p  { font-size:12.5px; color:#475569; margin:0; }
+.step .code-hint { margin-top:8px; font-size:11px; font-family:"SF Mono",Consolas,monospace;
+                    color:#64748b; background:#f1f5f9; padding:3px 7px; border-radius:3px; }
+
+/* 图片 */
+.img-wrap { margin:18px 0; text-align:center; background:#fff; border-radius:6px;
+             padding:14px; box-shadow:0 1px 4px rgba(0,0,0,.07); }
+.img-wrap img { max-width:100%; height:auto; display:block; margin:0 auto; }
+.img-caption { font-size:11.5px; color:#94a3b8; font-style:italic; margin-top:8px; }
+
+/* 附录 */
+.appendix-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+                  gap:18px; margin:18px 0; }
+.appendix-item { background:#fff; border-radius:6px; padding:10px;
+                  box-shadow:0 1px 4px rgba(0,0,0,.07); text-align:center; }
+.appendix-item img { width:100%; height:auto; display:block; }
+.appendix-item .label { font-size:12px; font-weight:600; color:#1e3a5f; margin-top:7px; }
+
+/* 高亮框 */
+.highlight-box { background:linear-gradient(135deg,#eff6ff,#f0fdf4);
+                  border:1px solid #bfdbfe; border-radius:6px; padding:16px 20px; margin:18px 0; }
+.highlight-box p { color:#1e40af; margin:0; font-size:13.5px; }
+
+/* 结论框 */
+.conclusion-box { border:1px solid #cbd5e1; border-radius:6px; background:#fff;
+                   padding:20px 24px; margin:18px 0; }
+.conclusion-box .section-label { font-size:12px; font-weight:700; color:#64748b;
+                                   text-transform:uppercase; letter-spacing:.05em;
+                                   margin-bottom:8px; }
+.conclusion-box ul { list-style:none; padding:0; margin:0 0 16px; }
+.conclusion-box ul:last-child { margin-bottom:0; }
+.conclusion-box li { font-size:13.5px; color:#334155; padding:4px 0;
+                      padding-left:14px; position:relative; }
+.conclusion-box li::before { content:"–"; position:absolute; left:0; color:#94a3b8; }
+
+hr { border:none; border-top:1px solid #e2e8f0; margin:38px 0; }
+footer { text-align:center; font-size:11.5px; color:#94a3b8;
+          padding:28px 0 14px; border-top:1px solid #e2e8f0; margin-top:44px; }
+@media print {
+  body { background:#fff; }
+  h2 { page-break-before:always; }
+  .img-wrap,.appendix-item { page-break-inside:avoid; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ══ 封面 ══════════════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <h1>A 股量化因子回测研究报告</h1>
+  <div class="subtitle">微观结构因子库 &nbsp;·&nbsp; 基本面因子库 &nbsp;·&nbsp; 单因子检验 &nbsp;·&nbsp; 多因子合成打分模型</div>
+  <div class="cover-divider"></div>
+  <div class="cover-meta">
+    回测区间：2007 年 01 月 – 2026 年 03 月 &nbsp;|&nbsp;
+    股票池：A 股全市场（剔除 ST / 停牌 / 次新）&nbsp;|&nbsp;
+    数据来源：同花顺 iFinD &amp; 通联数据 Datayes
+  </div>
+  <div class="cover-stats">
+    <div class="stat-card"><span class="num">10</span><span class="label">合成因子数</span></div>
+    <div class="stat-card"><span class="num">0.82</span><span class="label">多因子 ICIR（等权）</span></div>
+    <div class="stat-card"><span class="num">1.79</span><span class="label">多因子 LS Sharpe</span></div>
+    <div class="stat-card"><span class="num">26.9%</span><span class="label">多因子 LS 年化收益</span></div>
+  </div>
+</div>
+
+<!-- ══ 一、研究框架 ════════════════════════════════════════════════════════════ -->
+<h2>一、研究框架与方法</h2>
+
+<div class="cards">
+  <div class="card">
+    <h4>微观结构因子（7）</h4>
+    <p>换手率、短期反转、Roll 价差、CS 价差、Amihud 非流动性、短期波动率、隔夜收益率</p>
+  </div>
+  <div class="card gold">
+    <h4>基本面因子（3）</h4>
+    <p>Size（总市值）、BM（账面市值比）、PE1（动态市盈率）</p>
+  </div>
+  <div class="card teal">
+    <h4>股票池过滤</h4>
+    <p>剔除 ST 股、停牌股、上市不足 60 日次新股，动态月末调仓</p>
+  </div>
+  <div class="card navy">
+    <h4>IC / ICIR 检验</h4>
+    <p>Spearman Rank IC，ICIR = IC均值 / IC标准差（类比因子 Sharpe）<br>行业基准：&gt; 0.5 良好，&gt; 1.0 优秀</p>
+  </div>
+</div>
+
+<h3>多因子合成流程</h3>
+<div class="steps">
+  <div class="step">
+    <div class="step-num">1</div>
+    <h4>方向对齐</h4>
+    <p>负向因子 × (−1)，统一高得分 = 预期高收益</p>
+    <div class="code-hint">direction_map: {factor: +1 / −1}</div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <h4>Lowdin 正交化（可选）</h4>
+    <p>对称正交化消除因子间共线性<br>S = F'F，F̃ = F · S<sup>−½</sup></p>
+    <div class="code-hint">每月截面独立计算</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <h4>滚动 ICIR 权重</h4>
+    <p>12 月滚动窗口，负 IR 截断为 0，权重归一化；shift(1) 消除前瞻偏差</p>
+    <div class="code-hint">Σ weight = 1</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <h4>加权合成 → 分组</h4>
+    <p>向量化加权求和，NaN 权重自动归零，输出综合得分后五分组回测</p>
+    <div class="code-hint">等权 / ICIR 权重两种模式</div>
+  </div>
+</div>
+
+<hr>
+
+<!-- ══ 二、单因子回测结果 ══════════════════════════════════════════════════════ -->
+<h2>二、单因子回测结果</h2>
+
+<p>回测区间 2007 年 01 月 – 2026 年 03 月，A 股全市场，五分位分组（231 个月，6077 只股票）。LS 收益已按因子方向对齐，按 |ICIR| 降序排列。</p>
+
+<h3>2.1 微观结构因子</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+  <th>因子</th><th>IC 均值</th><th>ICIR</th><th>G1 年化</th><th>G5 年化</th>
+  <th>LS 年化</th><th>LS Sharpe</th><th>LS 最大回撤</th><th>|IC|&gt;0.02</th><th>评级</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td class="left">turnover_20（换手率）</td>
+  <td class="val-neg">−0.097</td><td class="val-neg">−0.715</td>
+  <td class="val-pos">+23.9%</td><td class="val-neg">−1.2%</td>
+  <td class="val-pos">+20.0%</td><td class="val-pos">1.36</td><td class="val-neg">−98.8%</td>
+  <td>90.9%</td><td><span class="badge badge-strong">★★★ 强</span></td>
+</tr>
+<tr>
+  <td class="left">roll_spread（Roll 价差）</td>
+  <td class="val-neg">−0.053</td><td class="val-neg">−0.490</td>
+  <td class="val-pos">+13.8%</td><td class="val-pos">+4.5%</td>
+  <td class="val-pos">+7.8%</td><td class="val-pos">0.71</td><td class="val-neg">−84.8%</td>
+  <td>87.8%</td><td><span class="badge badge-strong">★★★</span></td>
+</tr>
+<tr>
+  <td class="left">reversal_20（短期反转）</td>
+  <td class="val-neg">−0.064</td><td class="val-neg">−0.450</td>
+  <td class="val-pos">+15.5%</td><td class="val-neg">−0.2%</td>
+  <td class="val-pos">+15.2%</td><td class="val-pos">0.99</td><td class="val-neg">−96.3%</td>
+  <td>88.3%</td><td><span class="badge badge-strong">★★★</span></td>
+</tr>
+<tr>
+  <td class="left">cs_spread（CS 价差）</td>
+  <td class="val-neg">−0.056</td><td class="val-neg">−0.447</td>
+  <td class="val-pos">+14.7%</td><td class="val-pos">+5.0%</td>
+  <td class="val-pos">+7.7%</td><td class="val-pos">0.60</td><td class="val-neg">−82.1%</td>
+  <td>87.0%</td><td><span class="badge badge-strong">★★★</span></td>
+</tr>
+<tr>
+  <td class="left">amihud（Amihud 非流动性）</td>
+  <td class="val-pos">+0.059</td><td class="val-pos">+0.387</td>
+  <td class="val-pos">+3.1%</td><td class="val-pos">+24.3%</td>
+  <td class="val-pos">+20.3%</td><td class="val-pos">1.20</td><td class="val-neg">−24.9%</td>
+  <td>90.4%</td><td><span class="badge badge-strong">★★★ 最稳健</span></td>
+</tr>
+<tr>
+  <td class="left">volatility_30（短期波动率）</td>
+  <td class="val-neg">−0.066</td><td class="val-neg">−0.383</td>
+  <td class="val-pos">+13.9%</td><td class="val-pos">+3.7%</td>
+  <td class="val-pos">+7.7%</td><td class="val-pos">0.44</td><td class="val-neg">−82.1%</td>
+  <td>89.6%</td><td><span class="badge badge-mid">★★</span></td>
+</tr>
+<tr>
+  <td class="left">overnight_ret（隔夜收益率）</td>
+  <td class="val-pos">+0.017</td><td class="val-pos">+0.222</td>
+  <td class="val-pos">+7.1%</td><td class="val-pos">+10.9%</td>
+  <td class="val-pos">+2.7%</td><td class="val-pos">0.33</td><td class="val-neg">−29.8%</td>
+  <td>83.5%</td><td><span class="badge badge-weak">★ 弱</span></td>
+</tr>
+<tr>
+  <td class="left muted">momentum_12_1（中期动量）</td>
+  <td class="muted">−0.020</td><td class="muted">−0.128</td>
+  <td class="muted">+11.5%</td><td class="muted">+7.9%</td>
+  <td class="muted">+4.6%</td><td class="muted">0.31</td><td class="muted">−61.2%</td>
+  <td class="muted">90.4%</td><td><span class="badge badge-faint">✗ A股失效</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="note">* amihud LS 最大回撤仅 −24.9%，是全部因子中回撤最小的，体现流动性溢价的持续性。momentum_12_1 不纳入多因子合成。</p>
+
+<h3>2.2 基本面因子</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+  <th>因子</th><th>定义</th><th>IC 均值</th><th>ICIR</th><th>G1 年化</th><th>G5 年化</th>
+  <th>LS 年化</th><th>LS Sharpe</th><th>LS 最大回撤</th><th>评级</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td class="left">size（总市值）</td>
+  <td class="left muted">log(market_value)</td>
+  <td class="val-neg">−0.066</td><td class="val-neg">−0.355</td>
+  <td class="val-pos">+28.0%</td><td class="val-pos">+3.9%</td>
+  <td class="val-pos">+22.4%</td><td class="val-pos">1.16</td><td class="val-neg">−99.1%</td>
+  <td><span class="badge badge-strong">★★★ 强</span></td>
+</tr>
+<tr>
+  <td class="left">bm（账面市值比）</td>
+  <td class="left muted">log(1/PB)，Fama-French HML</td>
+  <td class="val-pos">+0.055</td><td class="val-pos">+0.334</td>
+  <td class="val-pos">+4.6%</td><td class="val-pos">+16.8%</td>
+  <td class="val-pos">+8.9%</td><td class="val-pos">0.49</td><td class="val-neg">−32.5%</td>
+  <td><span class="badge badge-mid">★★</span></td>
+</tr>
+<tr>
+  <td class="left">pe1（动态市盈率）</td>
+  <td class="left muted">总市值 / 最新季报净利润年化</td>
+  <td class="val-neg">−0.046</td><td class="val-neg">−0.298</td>
+  <td class="val-pos">+18.1%</td><td class="val-pos">+7.1%</td>
+  <td class="val-pos">+8.9%</td><td class="val-pos">0.55</td><td class="val-neg">−86.3%</td>
+  <td><span class="badge badge-mid">★★</span></td>
+</tr>
+<tr>
+  <td class="left muted">pb（市净率）</td>
+  <td class="left muted">原始 PB</td>
+  <td class="muted">−0.055</td><td class="muted">−0.333</td>
+  <td class="muted">+16.6%</td><td class="muted">+4.6%</td>
+  <td class="muted">+11.1%</td><td class="muted">0.62</td><td class="muted">−88.3%</td>
+  <td><span class="badge badge-faint">二选一→bm</span></td>
+</tr>
+<tr>
+  <td class="left muted">pe_ttm（市盈率 TTM）</td>
+  <td class="left muted">总市值 / 净利润 TTM（静态）</td>
+  <td class="muted">−0.037</td><td class="muted">−0.241</td>
+  <td class="muted">+10.7%</td><td class="muted">+3.8%</td>
+  <td class="muted">+5.9%</td><td class="muted">0.37</td><td class="muted">−70.9%</td>
+  <td><span class="badge badge-faint">二选一→pe1</span></td>
+</tr>
+<tr>
+  <td class="left muted">size2（流通市值）</td>
+  <td class="left muted">log(neg_market_value)</td>
+  <td class="muted">−0.049</td><td class="muted">−0.263</td>
+  <td class="muted">+22.9%</td><td class="muted">+4.5%</td>
+  <td class="muted">+19.1%</td><td class="muted">0.93</td><td class="muted">−98.2%</td>
+  <td><span class="badge badge-faint">二选一→size</span></td>
+</tr>
+<tr>
+  <td class="left muted">dividend_yield（股息率）</td>
+  <td class="left muted">近12月股息率</td>
+  <td class="muted">+0.020</td><td class="muted">+0.181</td>
+  <td class="muted">+11.9%</td><td class="muted">−15.2%</td>
+  <td class="muted">+17.2%</td><td class="muted">1.91</td><td class="muted">−1.6%</td>
+  <td><span class="badge badge-faint">⚠ LS 异常</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p class="note">* dividend_yield LS Sharpe = 1.91 异常（65% 股票股息率低于均值，G1 大量零股息小市值股混入规模溢价），暂不纳入合成。灰色行为对照组，已选定版本以加粗行呈现。</p>
+
+<hr>
+
+<!-- ══ 三、因子相关性分析 ══════════════════════════════════════════════════════ -->
+<h2>三、因子截面相关性分析</h2>
+
+<p>基于 2007 年 01 月 – 2026 年 03 月，共 230 个月的月度截面 Spearman Rank 相关系数均值。</p>
+
+<div class="img-wrap">
+  <img src="output/img/factor_correlation.png" alt="因子相关性热力图">
+  <div class="img-caption">图 3-1　因子截面 Spearman Rank 相关矩阵（月度均值，230 个月）</div>
+</div>
+
+<div class="highlight-box">
+<p>
+<strong>关键发现：</strong><br>
+① <strong>amihud ↔ size：ρ = −0.770</strong>（最高非重复对）— 小市值股天然非流动性高，两者信息高度重叠；但经济含义不同（规模 vs 流动性溢价），保留两者，ICIR 加权自动平衡。<br>
+② <strong>amihud ↔ amihud_zero_adj：ρ = +0.694</strong> — 未超 0.8 排除阈值，但 amihud（ICIR 0.387）更强，合成只用 amihud。<br>
+③ <strong>cs_spread / volatility_30 / turnover_20 相互中度正相关（ρ ≈ 0.50–0.54）</strong> — 均与市场高散户活跃度相关，合成时贡献部分重叠；但三者在不同市场状态下表现差异明显，保留多样性。<br>
+④ overnight_ret 与其他因子相关性均较低（|ρ| &lt; 0.21），独立信号价值较高，支持纳入合成。
+</p>
+</div>
+
+<hr>
+
+<!-- ══ 四、多因子合成结果 ══════════════════════════════════════════════════════ -->
+<h2>四、多因子合成打分模型结果</h2>
+
+<p>合成因子池：<strong>10 个因子</strong>（微观结构 7 + 基本面 3），方向对齐后等权或 ICIR 滚动加权合成。</p>
+
+<h3>4.1 合成因子池</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+  <th>类别</th><th>因子</th><th>ICIR（单因子）</th><th>方向</th><th>纳入理由</th>
+</tr></thead>
+<tbody>
+<tr><td>微观</td><td class="left">turnover_20</td><td class="val-neg">−0.715</td><td>负向 ×(−1)</td><td class="left">最强因子，信号极稳定</td></tr>
+<tr><td>微观</td><td class="left">reversal_20</td><td class="val-neg">−0.450</td><td>负向 ×(−1)</td><td class="left">短期反转，与其他因子低相关</td></tr>
+<tr><td>微观</td><td class="left">roll_spread</td><td class="val-neg">−0.490</td><td>负向 ×(−1)</td><td class="left">Roll 价差，独立流动性信号</td></tr>
+<tr><td>微观</td><td class="left">cs_spread</td><td class="val-neg">−0.447</td><td>负向 ×(−1)</td><td class="left">CS 高低价价差，流动性维度</td></tr>
+<tr><td>微观</td><td class="left">amihud</td><td class="val-pos">+0.387</td><td>正向 ×(+1)</td><td class="left">Amihud 非流动性，LS 最大回撤最小</td></tr>
+<tr><td>微观</td><td class="left">volatility_30</td><td class="val-neg">−0.383</td><td>负向 ×(−1)</td><td class="left">低波动异象，低相关独立 alpha</td></tr>
+<tr><td>微观</td><td class="left">overnight_ret</td><td class="val-pos">+0.222</td><td>正向 ×(+1)</td><td class="left">信号较弱但与其他因子独立</td></tr>
+<tr><td>基本面</td><td class="left">size</td><td class="val-neg">−0.355</td><td>负向 ×(−1)</td><td class="left">小市值溢价，A股最显著特征之一</td></tr>
+<tr><td>基本面</td><td class="left">bm</td><td class="val-pos">+0.334</td><td>正向 ×(+1)</td><td class="left">账面市值比，Fama-French 价值因子</td></tr>
+<tr><td>基本面</td><td class="left">pe1</td><td class="val-neg">−0.298</td><td>负向 ×(−1)</td><td class="left">动态 PE，比静态 pe_ttm 更及时</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>4.2 合成回测结果对比</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+  <th>模式</th><th>IC 均值</th><th>ICIR</th><th>G1 年化</th><th>G5 年化</th>
+  <th>LS 年化</th><th>LS Sharpe</th><th>LS 最大回撤</th><th>月度胜率</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td class="left"><strong>等权合成（Equal Weight）</strong></td>
+  <td class="val-pos">+0.114</td><td class="val-pos">0.815</td>
+  <td class="val-neg">−3.2%</td><td class="val-pos">+25.7%</td>
+  <td class="val-pos">+26.9%</td><td class="val-pos">1.79</td>
+  <td class="val-neg">−16.8%</td><td class="val-pos">72.6%</td>
+</tr>
+<tr>
+  <td class="left"><strong>ICIR 权重（Rolling 12M）</strong></td>
+  <td class="val-pos">+0.112</td><td class="val-pos">0.798</td>
+  <td class="val-neg">−2.4%</td><td class="val-pos">+25.8%</td>
+  <td class="val-pos">+26.3%</td><td class="val-pos">1.69</td>
+  <td class="val-neg">−18.2%</td><td class="val-pos">71.3%</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="highlight-box">
+<p>
+<strong>多因子合成亮点：</strong><br>
+① ICIR 从单因子最高 0.72（turnover_20）提升至合成后 <strong>0.82</strong>，多样化效应显著。<br>
+② LS Sharpe <strong>1.79</strong>，远超任意单因子（次高为 turnover_20 的 1.36）。<br>
+③ LS 最大回撤压缩至 <strong>−16.8%</strong>（等权），单因子最优回撤为 amihud 的 −24.9%。<br>
+④ 月度胜率 <strong>72.6%</strong>，意味着每 4 个月有约 3 个月多空组合为正。<br>
+⑤ 等权版本（ICIR 0.815）小幅优于 ICIR 权重版（0.798），说明 12 个月窗口内各因子 IC 相对稳定，动态权重的额外复杂度并未带来显著提升。
+</p>
+</div>
+
+<h3>4.3 ICIR 权重合成 — 最新期因子权重（2026-03）</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>因子</th><th>权重</th><th>类别</th></tr></thead>
+<tbody>
+<tr><td class="left">turnover_20</td><td class="val-pos">18.52%</td><td>微观</td></tr>
+<tr><td class="left">volatility_30</td><td class="val-pos">12.40%</td><td>微观</td></tr>
+<tr><td class="left">bm</td><td class="val-pos">12.09%</td><td>基本面</td></tr>
+<tr><td class="left">overnight_ret</td><td class="val-pos">10.87%</td><td>微观</td></tr>
+<tr><td class="left">cs_spread</td><td class="val-pos">8.96%</td><td>微观</td></tr>
+<tr><td class="left">size</td><td class="val-pos">8.95%</td><td>基本面</td></tr>
+<tr><td class="left">amihud</td><td class="val-pos">7.98%</td><td>微观</td></tr>
+<tr><td class="left">roll_spread</td><td class="val-pos">7.96%</td><td>微观</td></tr>
+<tr><td class="left">pe1</td><td class="val-pos">6.26%</td><td>基本面</td></tr>
+<tr><td class="left">reversal_20</td><td class="val-pos">6.01%</td><td>微观</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>4.4 多因子合成净值曲线</h3>
+
+<div class="img-wrap">
+  <img src="output/img/multi_factor_equal_nav.png" alt="等权合成净值曲线">
+  <div class="img-caption">图 4-1　多因子合成（等权）分组净值曲线 | 2007-01 ~ 2026-03</div>
+</div>
+
+<div class="img-wrap">
+  <img src="output/img/multi_factor_icir_nav.png" alt="ICIR 权重合成净值曲线">
+  <div class="img-caption">图 4-2　多因子合成（滚动 ICIR 权重）分组净值曲线 | 2007-01 ~ 2026-03</div>
+</div>
+
+<hr>
+
+<!-- ══ 五、主要结论 ════════════════════════════════════════════════════════════ -->
+<h2>五、主要结论与 A 股市场特征</h2>
+
+<div class="conclusion-box">
+  <div class="section-label">微观结构因子</div>
+  <ul>
+    <li><strong>换手率（turnover_20）</strong>是 A 股最强单因子（ICIR = −0.715），低换手率股票筹码稳定、散户炒作少，持续获取超额收益。</li>
+    <li><strong>Amihud 非流动性</strong>是回撤最小的因子（LS 最大回撤仅 −24.9%），流动性溢价在 A 股持续稳定。</li>
+    <li><strong>A 股流动性因子方向异常</strong>：Amihud、CS Spread、Roll Spread 均呈"流动性差 → 收益高"，与传统理论相同但程度更强，反映 A 股散户主导定价特征。</li>
+    <li><strong>动量因子（momentum_12_1）失效</strong>（ICIR = −0.128），A 股散户追涨杀跌导致强势股后续反转而非延续，与海外市场相反。</li>
+  </ul>
+</div>
+
+<div class="conclusion-box">
+  <div class="section-label">基本面因子</div>
+  <ul>
+    <li><strong>小市值溢价（size）</strong>是 A 股最显著的基本面特征，G1（小市值）年化 +28.0%，与欧美市场相比规模效应更为极端。</li>
+    <li><strong>价值因子（bm/pe1）</strong>在 A 股 2007–2026 均有效，但受熊市期间价值陷阱影响，回撤较大。</li>
+    <li><strong>动态 PE（pe1）优于静态 PE TTM</strong>，更及时的盈利信息带来更高 ICIR（−0.298 vs −0.241）。</li>
+    <li><strong>股息率因子异常</strong>：LS Sharpe 1.91 远高于 ICIR 0.181，实际是 G1（零股息小盘成长股）混入规模溢价所致，而非纯股息信号。</li>
+  </ul>
+</div>
+
+<div class="conclusion-box">
+  <div class="section-label">多因子合成</div>
+  <ul>
+    <li>10 因子合成 ICIR 达 <strong>0.82</strong>，超过单因子最高值 0.72，多样化效应（因子相关性低）是主要贡献来源。</li>
+    <li>等权合成与 ICIR 动态加权结果接近，说明各因子 IC 在样本期内相对稳定，等权是合理基准。</li>
+    <li>基本面因子（size/bm/pe1）的加入显著提升了多空组合的覆盖广度，但同时因 size↔amihud 高相关（ρ = −0.770）带来一定冗余，后续可通过正交化进一步优化。</li>
+  </ul>
+</div>
+
+<hr>
+
+<!-- ══ 附录：各因子净值曲线 ══════════════════════════════════════════════════ -->
+<h2>附录：各因子分组净值曲线</h2>
+
+<h3>微观结构因子</h3>
+<div class="appendix-grid">
+  <div class="appendix-item">
+    <img src="output/img/turnover_20_nav.png" alt="turnover_20">
+    <div class="label">换手率（turnover_20）ICIR = −0.715</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/reversal_20_nav.png" alt="reversal_20">
+    <div class="label">短期反转（reversal_20）ICIR = −0.450</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/roll_spread_nav.png" alt="roll_spread">
+    <div class="label">Roll 价差（roll_spread）ICIR = −0.490</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/cs_spread_nav.png" alt="cs_spread">
+    <div class="label">CS 价差（cs_spread）ICIR = −0.447</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/amihud_nav.png" alt="amihud">
+    <div class="label">Amihud 非流动性（amihud）ICIR = +0.387</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/volatility_30_nav.png" alt="volatility_30">
+    <div class="label">短期波动率（volatility_30）ICIR = −0.383</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/overnight_ret_nav.png" alt="overnight_ret">
+    <div class="label">隔夜收益率（overnight_ret）ICIR = +0.222</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/momentum_12_1_nav.png" alt="momentum_12_1">
+    <div class="label">中期动量（momentum_12_1）ICIR = −0.128（失效）</div>
+  </div>
+</div>
+
+<h3>基本面因子</h3>
+<div class="appendix-grid">
+  <div class="appendix-item">
+    <img src="output/img/size_nav.png" alt="size">
+    <div class="label">总市值（size）ICIR = −0.355</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/bm_nav.png" alt="bm">
+    <div class="label">账面市值比（bm）ICIR = +0.334</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/pe1_nav.png" alt="pe1">
+    <div class="label">动态市盈率（pe1）ICIR = −0.298</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/pb_nav.png" alt="pb">
+    <div class="label">市净率（pb）ICIR = −0.333（对照）</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/pe_ttm_nav.png" alt="pe_ttm">
+    <div class="label">市盈率 TTM（pe_ttm）ICIR = −0.241（对照）</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/size2_nav.png" alt="size2">
+    <div class="label">流通市值（size2）ICIR = −0.263（对照）</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/dividend_yield_nav.png" alt="dividend_yield">
+    <div class="label">股息率（dividend_yield）ICIR = +0.181（异常，待查）</div>
+  </div>
+</div>
+
+<h3>对照组：中性化版本</h3>
+<div class="appendix-grid">
+  <div class="appendix-item">
+    <img src="output/img/turnover_20_neutral_nav.png" alt="turnover_20_neutral">
+    <div class="label">换手率（流通市值中性化）ICIR = −0.718</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/amihud_neutral_nav.png" alt="amihud_neutral">
+    <div class="label">Amihud（流通市值中性化）ICIR = +0.213</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/amihud_zero_adj_nav.png" alt="amihud_zero_adj">
+    <div class="label">Amihud 零交易日调整（amihud_zero_adj）ICIR = +0.261</div>
+  </div>
+  <div class="appendix-item">
+    <img src="output/img/amihud_zero_adj_neutral_nav.png" alt="amihud_zero_adj_neutral">
+    <div class="label">Amihud 零交易日调整（中性化）ICIR = +0.153</div>
+  </div>
+</div>
+
+<footer>
+  A 股量化因子回测研究报告 &nbsp;|&nbsp; 回测区间：2007-01 ~ 2026-03 &nbsp;|&nbsp; 19 个因子 &nbsp;|&nbsp; 10 因子合成
+</footer>
+
+</div><!-- end .page -->
+</body>
+</html>
