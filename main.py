@@ -81,7 +81,7 @@ FACTOR_DIRECTIONS = {
 }
 
 MULTI_FACTOR_CONFIG = {
-    "run_combine":       False,  # ← 主开关：False = 只跑单因子，True = 同时跑多因子合成
+    "run_combine":       True,   # ← 主开关：False = 只跑单因子，True = 同时跑多因子合成
     "use_orthogonalize": False,  # True = 先做 Lowdin 正交化再合成
     "icir_window":       12,     # 滚动 ICIR 权重的窗口（月）
     "run_equal_weight":  True,   # 是否运行等权版本
@@ -101,23 +101,32 @@ MULTI_FACTOR_CONFIG = {
 # =============================================================================
 
 COMBINE_FACTORS = {
+    # ── 微观结构（7个）────────────────────────────────────────────────────────
+    # 因子选择依据（2007-2026 单因子回测 + 截面 Spearman 相关性分析）：
+    #   · turnover_20 vs turnover_20_neutral → 效果相近，选无中性化（更简洁）
+    #   · amihud vs amihud_zero_adj → amihud ICIR 更强（0.387 vs 0.261），选 amihud
+    #     （amihud_zero_adj 截面相关 ρ=0.694，未超0.8阈值，但选更强的即可）
+    #   · momentum_12_1 ICIR=-0.128，A股失效，不纳入
     "microstructure": [
-        "turnover_20",       # 换手率（二选一：turnover_20 / turnover_20_neutral）
-        "amihud",            # Amihud（二选一：amihud / amihud_neutral）
-        "amihud_zero_adj",   # Amihud 零交易日调整版
-        "reversal_20",       # 短期反转
-        "momentum_12_1",     # 中期动量
-        "cs_spread",         # CS 价差
-        "roll_spread",       # Roll 价差
-        "overnight_ret",     # 隔夜收益率
-        "volatility_30",     # 短期波动率
+        "turnover_20",    # ICIR -0.715 ★★★ 最强因子
+        "reversal_20",    # ICIR -0.450 ★★★ 短期反转
+        "roll_spread",    # ICIR -0.490 ★★★ Roll 价差
+        "cs_spread",      # ICIR -0.447 ★★★ CS 价差
+        "amihud",         # ICIR +0.387 ★★★ Amihud 非流动性（无中性化）
+        "volatility_30",  # ICIR -0.383 ★★  短期波动率
+        "overnight_ret",  # ICIR +0.222 ★   隔夜收益率（弱但独立信号）
     ],
+    # ── 基本面（3个）────────────────────────────────────────────────────────
+    # 因子选择依据：
+    #   · bm vs pb → bm 正向，符合 Fama-French HML 逻辑，选 bm
+    #   · pe1 vs pe_ttm → pe1 更及时（最新季报年化），ICIR -0.298 > pe_ttm -0.241
+    #   · size vs size2 → size（总市值）ICIR -0.355 > size2 -0.263
+    #   · size ↔ amihud 截面相关 ρ=-0.770，信息有重叠，但经济含义不同，保留两者（方案A）
+    #   · dividend_yield LS Sharpe 异常（1.91 vs ICIR 0.181），混入规模效应，暂不纳入
     "fundamental": [
-        # 单因子跑完对比后再填，示例：
-        # "bm",              # 账面市值比（二选一：bm / pb）
-        # "pe_ttm",          # 市盈率 TTM（二选一：pe_ttm / pe1）
-        # "size",            # 市值（二选一：size / size2）
-        # "dividend_yield",  # 股息率
+        "size",           # ICIR -0.355 ★★★ 小市值溢价（总市值）
+        "bm",             # ICIR +0.334 ★★  账面市值比（价值因子，Fama-French HML）
+        "pe1",            # ICIR -0.298 ★★  动态市盈率（最新季报年化）
     ],
 }
 
@@ -126,24 +135,24 @@ FACTOR_FLAGS = {
     "reversal_20":               True,    # 短期反转（20日累计收益）
     "momentum_12_1":             True,    # 中期动量（12-1月）
     "turnover_20":               True,    # 换手率（20日均，无中性化）
-    "turnover_20_neutral":       False,   # 换手率（20日均，流通市值中性化）
+    "turnover_20_neutral":       True,   # 换手率（20日均，流通市值中性化）
     "amihud":                    True,    # Amihud 非流动性（3月滚动，成交额口径，无中性化）
-    "amihud_neutral":            False,   # Amihud 非流动性（3月滚动，流通市值中性化）
+    "amihud_neutral":            True,   # Amihud 非流动性（3月滚动，流通市值中性化）
     "amihud_zero_adj":           True,    # Amihud 零交易日调整版（log+NT修正，无中性化）
-    "amihud_zero_adj_neutral":   False,   # Amihud 零交易日调整版（流通市值中性化）
+    "amihud_zero_adj_neutral":   True,   # Amihud 零交易日调整版（流通市值中性化）
     "cs_spread":                 True,    # Corwin-Schultz 高低价价差
     "roll_spread":               True,    # Roll 价差
     "overnight_ret":             True,    # 隔夜收益率（月均）
     "volatility_30":             True,    # 短期波动率（30日）
 
     # ── 基本面因子（活跃，可直接计算）──────────────────────────────────────
-    "pb":                        False,   # 市净率（无中性化）
-    "bm":                        False,   # 账面市值比 log(1/PB)（无中性化，正向因子）
-    "pe_ttm":                    False,   # 市盈率 TTM（无中性化）
-    "pe1":                       False,   # 动态市盈率（无中性化）
-    "dividend_yield":            False,   # 股息率 TTM（无中性化）
-    "size":                      False,   # log(总市值)（无中性化）
-    "size2":                     False,   # log(流通市值)（无中性化）
+    "pb":                        True,   # 市净率（无中性化）
+    "bm":                        True,   # 账面市值比 log(1/PB)（无中性化，正向因子）
+    "pe_ttm":                    True,   # 市盈率 TTM（无中性化）
+    "pe1":                       True,   # 动态市盈率（无中性化）
+    "dividend_yield":            True,   # 股息率 TTM（无中性化）
+    "size":                      True,   # log(总市值)（无中性化）
+    "size2":                     True,   # log(流通市值)（无中性化）
     "net_profit_yoy":            False,   # 净利润同比增速（流通市值+行业双重中性化）
 
     # ── 待激活因子（需补充数据后将 False 改为 True）─────────────────────────
