@@ -81,10 +81,44 @@ FACTOR_DIRECTIONS = {
 }
 
 MULTI_FACTOR_CONFIG = {
+    "run_combine":       False,  # ← 主开关：False = 只跑单因子，True = 同时跑多因子合成
     "use_orthogonalize": False,  # True = 先做 Lowdin 正交化再合成
     "icir_window":       12,     # 滚动 ICIR 权重的窗口（月）
     "run_equal_weight":  True,   # 是否运行等权版本
     "run_icir_weight":   True,   # 是否运行 ICIR 权重版本
+}
+
+# =============================================================================
+# 多因子合成因子池
+#
+# 独立于 FACTOR_FLAGS：FACTOR_FLAGS 控制哪些因子跑单因子回测，
+# COMBINE_FACTORS 控制哪些因子进入多因子合成，两者互不干扰。
+#
+# 使用说明：
+#   - 同类双版本因子（如 turnover_20 / turnover_20_neutral）只选其一填入
+#   - 将某一类全部注释掉 = 该类不参与合成（等效于分类开关）
+#   - 列表中的因子必须在 FACTOR_FLAGS 中为 True（否则无缓存可用）
+# =============================================================================
+
+COMBINE_FACTORS = {
+    "microstructure": [
+        "turnover_20",       # 换手率（二选一：turnover_20 / turnover_20_neutral）
+        "amihud",            # Amihud（二选一：amihud / amihud_neutral）
+        "amihud_zero_adj",   # Amihud 零交易日调整版
+        "reversal_20",       # 短期反转
+        "momentum_12_1",     # 中期动量
+        "cs_spread",         # CS 价差
+        "roll_spread",       # Roll 价差
+        "overnight_ret",     # 隔夜收益率
+        "volatility_30",     # 短期波动率
+    ],
+    "fundamental": [
+        # 单因子跑完对比后再填，示例：
+        # "bm",              # 账面市值比（二选一：bm / pb）
+        # "pe_ttm",          # 市盈率 TTM（二选一：pe_ttm / pe1）
+        # "size",            # 市值（二选一：size / size2）
+        # "dividend_yield",  # 股息率
+    ],
 }
 
 FACTOR_FLAGS = {
@@ -356,26 +390,47 @@ def main():
     print("=" * 60)
 
     # --- 步骤 4：多因子合成打分回测 ---
+    if not MULTI_FACTOR_CONFIG.get("run_combine", False):
+        print(f"\n{'=' * 60}")
+        print("  [Step 4] 多因子合成：已关闭（run_combine=False）")
+        print("  单因子回测完成。如需运行合成，将 run_combine 改为 True。")
+        print("=" * 60)
+        return results
+
     print(f"\n{'=' * 60}")
     print("  [Step 4] 多因子合成打分模型")
     print("=" * 60)
 
-    # 4.1 从结果或缓存中收集所有已激活因子
-    active_directions = {
-        name: FACTOR_DIRECTIONS[name]
-        for name in active_factors
-        if name in FACTOR_DIRECTIONS and name in results
-    }
+    # 4.1 从 COMBINE_FACTORS 中收集参与合成的因子
+    combine_names = [f for lst in COMBINE_FACTORS.values() for f in lst]
+
+    # 校验：必须在 results 中（已跑过单因子）且在 FACTOR_DIRECTIONS 中
+    missing = [n for n in combine_names if n not in results]
+    if missing:
+        print(f"  ⚠ 以下因子不在单因子结果中（未在 FACTOR_FLAGS 中激活或计算失败）：{missing}")
+        combine_names = [n for n in combine_names if n in results]
+
     factors_for_combine = {
         name: results[name]["factor"]
-        for name in active_directions
+        for name in combine_names
+        if name in FACTOR_DIRECTIONS
+    }
+    active_directions = {
+        name: FACTOR_DIRECTIONS[name]
+        for name in factors_for_combine
     }
 
     if len(factors_for_combine) < 2:
         print("  ⚠ 可用因子数不足 2 个，跳过多因子合成")
         return results
 
-    print(f"\n  参与合成的因子（{len(factors_for_combine)} 个）：{list(factors_for_combine.keys())}")
+    micro_in = [f for f in COMBINE_FACTORS.get("microstructure", []) if f in factors_for_combine]
+    fund_in  = [f for f in COMBINE_FACTORS.get("fundamental", [])    if f in factors_for_combine]
+    print(f"\n  参与合成因子（共 {len(factors_for_combine)} 个）")
+    if micro_in:
+        print(f"    微观结构（{len(micro_in)}）：{micro_in}")
+    if fund_in:
+        print(f"    基本面  （{len(fund_in)}）：{fund_in}")
 
     # 4.2 方向对齐
     print("\n  方向对齐...")
