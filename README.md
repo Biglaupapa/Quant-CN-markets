@@ -1,4 +1,4 @@
-# QuantFramework — A 股量化因子回测框架
+# Quant-CN-markets — A 股量化因子回测框架
 
 模块化因子研究平台，支持因子构建、股票池过滤、分组回测、IC 检验与净值可视化。
 数据源为 Database（主）+ `_archive/raw_data`（存档补充）。
