@@ -40,10 +40,10 @@ from typing import Optional, Dict
 import warnings
 from sklearn.linear_model import LinearRegression
 
-from data.loader import load_data, to_monthly
-from data.universe import apply_universe, build_investable_mask
-from factors.base import preprocess, winsorize, standardize
-from config.settings import (
+from src.data.loader import load_data, load_data_hk, to_monthly
+from src.data.universe import apply_universe, build_investable_mask, build_investable_mask_hk
+from src.factors.base import preprocess, winsorize, standardize
+from src.config.settings import (
     REVERSAL_WINDOW,
     MOMENTUM_LONG,
     MOMENTUM_SKIP,
@@ -62,12 +62,37 @@ from config.settings import (
     AP_BETA_WINDOW_MONTHS,
     AP_C1, AP_C2, AP_C3,
 )
-from factors.fundamental import _get_log_mktcap
+from src.factors.fundamental import _get_log_mktcap
 
 # 价格字段选择（由 settings.USE_ADJ_PRICE 控制）
 # 修改 settings.py 中的 USE_ADJ_PRICE 即可全局切换，无需逐函数修改
 _CLOSE = "close_adj" if USE_ADJ_PRICE else "close"
 _OPEN  = "open_adj"  if USE_ADJ_PRICE else "open"
+
+
+# =============================================================================
+# 市场路由辅助函数
+# =============================================================================
+
+def _get_market_loaders(market: str):
+    """
+    根据市场代码返回对应的数据加载函数和股票池掩码构建函数。
+
+    Parameters
+    ----------
+    market : str
+        "A"  → A 股：load_data + build_investable_mask（存档 + Database 合并）
+        "HK" → 港股：load_data_hk + build_investable_mask_hk（仅 Database）
+
+    Returns
+    -------
+    (loader_fn, mask_fn)
+        loader_fn(fields, start, end) → dict
+        mask_fn(start, end, freq) → pd.DataFrame
+    """
+    if market == "HK":
+        return load_data_hk, build_investable_mask_hk
+    return load_data, build_investable_mask
 
 
 # =============================================================================
@@ -153,16 +178,19 @@ def calc_momentum_12_1(
 def _calc_turnover_20_raw(
     start: Optional[str],
     end: Optional[str],
+    market: str = "A",
 ) -> tuple:
     """内部辅助：返回 (factor_m, mask)，供两个版本共用。"""
-    data = load_data(["turn"], start=start, end=end)
+    _load, _mask_builder = _get_market_loaders(market)
+
+    data = _load(["turn"], start=start, end=end)
     turn = data.get("turn")
 
     if turn is None:
         warnings.warn("[microstructure] calc_turnover_20: 换手率数据加载失败，跳过")
         return None, None
 
-    mask = build_investable_mask(start=start, end=end, freq="D")
+    mask = _mask_builder(start=start, end=end, freq="D")
     turn = apply_universe(turn, mask)
 
     valid_count = turn.rolling(window=TURNOVER_WINDOW).count()
@@ -176,12 +204,14 @@ def _calc_turnover_20_raw(
 def calc_turnover_20(
     start: Optional[str] = None,
     end: Optional[str] = None,
+    market: str = "A",
 ) -> pd.DataFrame:
     """
     换手率因子（无中性化）：过去 TURNOVER_WINDOW 个交易日的平均换手率，月末取值。
-    数据：turn [db]
+    数据：turn [db]（A股 / 港股均可用）
+    market : "A"（默认，A股）或 "HK"（港股）
     """
-    factor_m, _ = _calc_turnover_20_raw(start, end)
+    factor_m, _ = _calc_turnover_20_raw(start, end, market=market)
     if factor_m is None:
         return pd.DataFrame()
     return preprocess(factor_m)
@@ -190,13 +220,15 @@ def calc_turnover_20(
 def calc_turnover_20_neutral(
     start: Optional[str] = None,
     end: Optional[str] = None,
+    market: str = "A",
 ) -> pd.DataFrame:
     """
     换手率因子（流通市值中性化）：剔除换手率与 log(流通市值) 的线性相关后取残差。
-    中性化变量：neg_market_value（Datayes，2004+）
+    中性化变量：neg_market_value（Datayes，2004+，仅 A 股可用）
     数据：turn [db] + neg_market_value [db]
+    注意：港股（market="HK"）无 neg_market_value，自动退化为无中性化版本。
     """
-    factor_m, mask = _calc_turnover_20_raw(start, end)
+    factor_m, mask = _calc_turnover_20_raw(start, end, market=market)
     if factor_m is None:
         return pd.DataFrame()
 
@@ -220,9 +252,12 @@ def calc_turnover_20_neutral(
 def _calc_amihud_factor(
     start: Optional[str],
     end: Optional[str],
+    market: str = "A",
 ) -> tuple:
     """内部辅助：返回 (factor, mask)，供两个版本共用。"""
-    data = load_data(["close_adj", "amt"], start=start, end=end)
+    _load, _mask_builder = _get_market_loaders(market)
+
+    data  = _load(["close_adj", "amt"], start=start, end=end)
     close = data.get("close_adj") if data.get("close_adj") is not None else data.get("close")
     amt   = data.get("amt")
 
@@ -230,7 +265,7 @@ def _calc_amihud_factor(
         warnings.warn("[microstructure] calc_amihud: 缺少 close 或 amt 数据")
         return None, None
 
-    mask = build_investable_mask(start=start, end=end, freq="D")
+    mask  = _mask_builder(start=start, end=end, freq="D")
     close = apply_universe(close, mask)
     amt   = apply_universe(amt, mask)
 
@@ -270,16 +305,18 @@ def _calc_amihud_factor(
 def calc_amihud(
     start: Optional[str] = None,
     end: Optional[str] = None,
+    market: str = "A",
 ) -> pd.DataFrame:
     """
     Amihud (2002) 非流动性因子（无中性化）：
         ILLIQ_{i,t} = mean(|R_{i,d}| / Amount_{i,d}) × ILLIQ_SCALE
     其中 d 取过去 3 个月的日度数据，滞后 1 个月以避免前瞻偏差。
 
-    数据：close_adj, amt [db]
+    数据：close_adj, amt [db]（A股 / 港股均可用）
     因子方向：ILLIQ 越大 = 流动性越差。
+    market : "A"（默认，A股）或 "HK"（港股）
     """
-    factor, _ = _calc_amihud_factor(start, end)
+    factor, _ = _calc_amihud_factor(start, end, market=market)
     if factor is None:
         return pd.DataFrame()
     return preprocess(factor)
@@ -288,13 +325,15 @@ def calc_amihud(
 def calc_amihud_neutral(
     start: Optional[str] = None,
     end: Optional[str] = None,
+    market: str = "A",
 ) -> pd.DataFrame:
     """
     Amihud 非流动性因子（流通市值中性化）：剔除与 log(流通市值) 的线性相关后取残差。
-    中性化变量：neg_market_value（Datayes，2004+）
+    中性化变量：neg_market_value（Datayes，2004+，仅 A 股可用）
     数据：close_adj, amt [db] + neg_market_value [db]
+    注意：港股（market="HK"）无 neg_market_value，自动退化为无中性化版本。
     """
-    factor, mask = _calc_amihud_factor(start, end)
+    factor, mask = _calc_amihud_factor(start, end, market=market)
     if factor is None:
         return pd.DataFrame()
 
@@ -407,6 +446,7 @@ def calc_amihud_zero_adj_neutral(
 def calc_cs_spread(
     start: Optional[str] = None,
     end: Optional[str] = None,
+    market: str = "A",
 ) -> pd.DataFrame:
     """
     Corwin-Schultz (2012) 高低价价差估计：
@@ -417,12 +457,14 @@ def calc_cs_spread(
 
     月度平均，要求至少 MIN_ROLLING_VALID_DAYS 个有效值。
 
-    数据：high_adj, low_adj [db]
+    数据：high_adj, low_adj [db]（A股 / 港股均可用）
         使用后复权高低价，避免除权日前后跨日价格不连续导致
         max(H_t, H_{t+1}) / min(L_t, L_{t+1}) 失真。
-        覆盖：2003-01-02 至今，6077 只股票。
+    market : "A"（默认，A股）或 "HK"（港股）
     """
-    data = load_data(["high_adj", "low_adj"], start=start, end=end)
+    _load, _mask_builder = _get_market_loaders(market)
+
+    data = _load(["high_adj", "low_adj"], start=start, end=end)
     high = data.get("high_adj")
     low  = data.get("low_adj")
 
@@ -430,7 +472,7 @@ def calc_cs_spread(
         warnings.warn("[microstructure] calc_cs_spread: 缺少 high_adj/low_adj 数据")
         return pd.DataFrame()
 
-    mask = build_investable_mask(start=start, end=end, freq="D")
+    mask = _mask_builder(start=start, end=end, freq="D")
     high = apply_universe(high, mask)
     low  = apply_universe(low,  mask)
 

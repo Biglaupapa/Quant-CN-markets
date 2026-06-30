@@ -8,43 +8,54 @@
 ## 快速开始
 
 ```bash
-# 激活共享 conda 环境
-conda activate /Users/louisliu/Mirror/MyProjects/env
+# 激活共享环境（上层目录 venv，Python 3.13）
+source /Users/louis/MyProjects/venv/bin/activate
 
-# 运行回测（在 main.py 中将需要的因子 FACTOR_FLAGS 设为 True）
-cd QuantFramework
-python main.py
+# 运行回测（在 src/main.py 中将需要的因子 FACTOR_FLAGS 设为 True）
+# 注意：以包方式运行，须在 Quant/ 根目录执行
+cd /Users/louis/MyProjects/Quant
+python -m src.main
 ```
 
-回测结果保存至 `output/`，净值曲线图保存至 `output/img/`。
+代码以 `src/` 包形式组织，内部统一使用 `from src.xxx import ...` 绝对导入，
+因此必须用 `python -m src.main` 运行（不能 `python src/main.py`）。
+回测结果保存至 `output/`，净值曲线图保存至 `output/A/img/`、`output/HK/img/`。
+依赖见 `requirements.txt`。
 
 ---
 
 ## 项目结构
 
 ```
-QuantFramework/
-├── main.py                    # 唯一运行入口
-├── config/
-│   └── settings.py            # 全局路径、因子参数、中性化开关
-├── data/
-│   ├── loader.py              # 统一数据加载（自动拼接存档与 Database）
-│   └── universe.py            # 股票池过滤（剔除 ST、停牌、次新股）
-├── factors/
-│   ├── base.py                # 预处理流水线（去极值 → 中性化 → 标准化）
-│   ├── microstructure.py      # 微观结构因子
-│   ├── fundamental.py         # 基本面因子
-│   ├── cache/                 # 因子计算缓存（.csv）
-│   └── FACTORS.md             # 因子构建方法文档
-├── backtest/
-│   ├── engine.py              # 月度分组回测核心
-│   ├── metrics.py             # 绩效指标（IC、ICIR、Sharpe、最大回撤等）
-│   └── report.py              # 报告输出（控制台 + CSV + PNG）
-├── strategy/
-│   ├── optimizer.py           # 因子打分与分组工具
-│   └── combine_factors.py     # 多因子合成（方向对齐 → 正交化 → ICIR 权重）
-├── output/                    # 回测输出（CSV + PNG）
-└── _archive/raw_data/         # 历史存档 CSV（2014-2021）
+Quant/                         # ← git 跟踪：仅 src/ 代码 + 项目文件
+├── requirements.txt           # 依赖说明（共用上层 venv，Python 3.13）
+├── README.md  CLAUDE.md  .gitignore
+├── src/                       # 源码包，入口 python -m src.main
+│   ├── __init__.py
+│   ├── main.py                # 唯一运行入口
+│   ├── convert_report_to_pdf.py
+│   ├── config/
+│   │   └── settings.py        # 全局路径、因子参数、中性化开关
+│   ├── data/
+│   │   ├── loader.py          # 统一数据加载（自动拼接存档与 Database）
+│   │   └── universe.py        # 股票池过滤（剔除 ST、停牌、次新股）
+│   ├── factors/
+│   │   ├── base.py            # 预处理流水线（去极值 → 中性化 → 标准化）
+│   │   ├── microstructure.py  # 微观结构因子
+│   │   ├── fundamental.py     # 基本面因子
+│   │   └── FACTORS.md         # 因子构建方法文档
+│   ├── backtest/
+│   │   ├── engine.py          # 月度分组回测核心
+│   │   ├── metrics.py         # 绩效指标（IC、ICIR、Sharpe、最大回撤等）
+│   │   └── report.py          # 报告输出（控制台 + CSV + PNG）
+│   └── strategy/
+│       ├── optimizer.py       # 因子打分与分组工具
+│       ├── scoring.py         # 因子打分
+│       └── combine_factors.py # 多因子合成（方向对齐 → 正交化 → ICIR 权重）
+│
+├── output/                    # 回测输出 CSV + PNG（不跟踪）
+├── reports/                   # HTML / pptx 报告（不跟踪）
+└── _archive/                  # 历史代码 + raw_data + 旧脚本 defense/run_backtest（不跟踪）
 ```
 
 ---
@@ -145,7 +156,7 @@ BACKTEST_CONFIG = {
 
 | 来源 | 路径 | 覆盖 |
 |------|------|------|
-| Database（主） | `/Mirror/MyProjects/Database/data/stock/A/` | 2004-至今，6077只股票 |
+| Database（主） | `/Users/louis/MyProjects/Database/data/stock/A/` | 2004-至今，6077只股票 |
 | 存档（辅） | `_archive/raw_data/` | 2014-2021，仅 `net_profit` 仍依赖 |
 
 Database 数据由 `Database/codes/ifind.py` 和 `Database/codes/datayes.py` 维护更新。

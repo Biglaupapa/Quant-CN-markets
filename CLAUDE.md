@@ -7,42 +7,51 @@ A 股量化因子研究平台，支持因子构建、股票池过滤、分组回
 ## 快速开始
 
 ```bash
-conda activate /Users/louisliu/Mirror/MyProjects/env
-cd ~/Mirror/MyProjects/QuantFramework
-python main.py
+source /Users/louis/MyProjects/venv/bin/activate   # 共享 venv，Python 3.13
+cd /Users/louis/MyProjects/Quant
+python -m src.main                                  # 以包方式运行（须在 Quant/ 根目录）
 ```
 
-控制哪些因子参与回测：修改 `main.py` 顶部的 `FACTOR_FLAGS` 字典（`True` = 计算，`False` = 跳过）。
+代码以 `src/` 包形式组织，内部统一 `from src.xxx import ...`，必须用 `python -m src.main` 运行（不能 `python src/main.py`）。依赖见 `requirements.txt`。
+
+控制哪些因子参与回测：修改 `src/main.py` 顶部的 `FACTOR_FLAGS` 字典（`True` = 计算，`False` = 跳过）。
 
 ---
 
 ## 项目结构
 
 ```
-QuantFramework/
-├── main.py                  # ★ 唯一运行入口
-├── config/
-│   └── settings.py          # 全局路径、字段映射、因子参数
-├── data/
-│   ├── loader.py            # 统一数据加载（Database 优先，存档补充）
-│   └── universe.py          # 股票池过滤（ST / 停牌 / 次新股）
-├── factors/
-│   ├── microstructure.py    # 微观结构因子
-│   └── fundamental.py       # 基本面因子
-├── backtest/
-│   ├── engine.py            # 月度分组回测核心
-│   ├── metrics.py           # 绩效指标（IC、ICIR、Sharpe、最大回撤）
-│   └── report.py            # 报告输出（控制台 + CSV + 净值曲线 PNG）
-├── strategy/
-│   └── optimizer.py         # 因子打分与分组
-├── factors/output/          # 回测结果输出目录
-│   ├── cache/               # 因子缓存（.csv），命中则跳过重新计算
-│   ├── <factor>_group_returns.csv
-│   ├── <factor>_ic_series.csv
-│   ├── <factor>_summary.csv
-│   └── <factor>_nav.png     # 分组累计净值曲线
-└── _archive/raw_data/       # 历史存档 CSV（2014~2021，转置格式）
-                             # 仅 net_profit 因子仍依赖此来源
+Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结果不跟踪）
+├── requirements.txt         # 依赖说明（共用上层 venv）
+├── README.md  CLAUDE.md  .gitignore
+├── src/                     # ★ 源码包，入口 python -m src.main
+│   ├── __init__.py
+│   ├── main.py              # ★ 唯一运行入口
+│   ├── convert_report_to_pdf.py
+│   ├── config/settings.py   # 全局路径、字段映射、因子参数
+│   ├── data/
+│   │   ├── loader.py        # 统一数据加载（Database 优先，存档补充）
+│   │   └── universe.py      # 股票池过滤（ST / 停牌 / 次新股）
+│   ├── factors/
+│   │   ├── base.py          # 预处理流水线
+│   │   ├── microstructure.py# 微观结构因子
+│   │   └── fundamental.py   # 基本面因子
+│   ├── backtest/
+│   │   ├── engine.py        # 月度分组回测核心
+│   │   ├── metrics.py       # 绩效指标（IC、ICIR、Sharpe、最大回撤）
+│   │   └── report.py        # 报告输出（控制台 + CSV + 净值曲线 PNG）
+│   └── strategy/
+│       ├── optimizer.py     # 因子打分与分组
+│       ├── scoring.py       # 因子打分
+│       └── combine_factors.py # 多因子合成
+│
+├── output/                  # 回测结果（不跟踪）
+│   ├── cache/               # 因子缓存，命中则跳过重新计算
+│   ├── A/stats/  A/img/     # A 股 CSV 统计 + 净值曲线 PNG
+│   └── HK/stats/ HK/img/    # 港股
+├── reports/                 # HTML / pptx 报告（不跟踪）
+└── _archive/                # 历史代码 + raw_data + 旧脚本（不跟踪）
+                             # raw_data 仅 net_profit 因子仍依赖
 ```
 
 ---
@@ -50,7 +59,7 @@ QuantFramework/
 ## 数据源
 
 ### 主数据源：Database
-路径：`/Users/louisliu/Mirror/MyProjects/Database/data/stock/A/`
+路径：`/Users/louis/MyProjects/Database/data/stock/A/`
 
 | 字段（loader 名） | 文件 | 覆盖范围 | 用途 |
 |---|---|---|---|
@@ -83,7 +92,7 @@ BACKTEST_END   = "2024-12-31"   # 回测截止日期（None = 运行当天）
 BACKTEST_CONFIG = {
     "n_groups":     5,      # 分组数（5 或 10）
     "freq":         12,     # 数据频率（月度=12，季度=4）
-    "save_output":  True,   # 保存 CSV 和 PNG 至 factors/output/
+    "save_output":  True,   # 保存 CSV 和 PNG 至 output/
     "force_recalc": False,  # True = 忽略缓存强制重算（数据更新后使用）
 }
 ```

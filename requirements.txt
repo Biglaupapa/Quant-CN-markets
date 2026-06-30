@@ -1,0 +1,18 @@
+# =============================================================================
+# Quant — 依赖说明
+# -----------------------------------------------------------------------------
+# 本项目共用上层目录的 venv 环境（Python 3.13），无需单独建环境：
+#   source /Users/louis/MyProjects/venv/bin/activate
+#
+# 本文件仅用于「说明」项目实际依赖的第三方库，版本号取自当前 venv。
+# 如需在新环境复现，可执行：pip install -r requirements.txt
+#
+# 标准库依赖（无需安装）：copy, functools, gc, math, pathlib,
+#                         subprocess, sys, time, typing, warnings
+# =============================================================================
+
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.18.0
+scikit-learn==1.9.0
+matplotlib==3.11.0

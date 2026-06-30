@@ -21,7 +21,7 @@ import numpy as np
 import warnings
 from typing import Optional
 
-from backtest.metrics import calc_ic
+from src.backtest.metrics import calc_ic
 
 
 # -----------------------------------------------------------------------------

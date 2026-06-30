@@ -18,7 +18,7 @@ from sklearn.linear_model import LinearRegression
 from typing import Optional, List
 import warnings
 
-from config.settings import INDUSTRY_H5_PATH, MIN_ROLLING_VALID_DAYS
+from src.config.settings import INDUSTRY_H5_PATH, MIN_ROLLING_VALID_DAYS
 
 
 # -----------------------------------------------------------------------------

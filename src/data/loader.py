@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 import warnings
 
-from config.settings import (
+from src.config.settings import (
     ARCHIVE_DATA_DIR,
     DATABASE_DIR,
     ARCHIVE_FIELD_MAP,
@@ -23,6 +23,8 @@ from config.settings import (
     HIST_START,
     HIST_END,
     DB_START,
+    HK_DATABASE_DIR,
+    HK_DATABASE_FIELD_MAP,
 )
 
 
@@ -218,6 +220,85 @@ def load_data(
             print(f"[loader] ✓ {field:20s} shape={data[field].shape}")
         except Exception as e:
             warnings.warn(f"[loader] ✗ {field}: {e}")
+    return data
+
+
+# -----------------------------------------------------------------------------
+# 港股专用接口：加载港股 Database 字段
+# -----------------------------------------------------------------------------
+
+def load_field_hk(
+    field: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    加载港股单个字段，直接读取 HK_DATABASE_DIR，不合并存档。
+
+    Parameters
+    ----------
+    field : str
+        字段名，参考 HK_DATABASE_FIELD_MAP 的键。
+        可用字段：close_adj / open_adj / high_adj / low_adj / volume / amt / turn
+    start, end : str, optional
+        时间范围，格式 "YYYY-MM-DD"
+
+    Returns
+    -------
+    pd.DataFrame
+        index=DatetimeIndex(日频), columns=港股代码（格式如 "0700.HK"）
+    """
+    if field not in HK_DATABASE_FIELD_MAP:
+        raise ValueError(
+            f"[loader_hk] 字段 '{field}' 不在 HK_DATABASE_FIELD_MAP 中。"
+            f"可用字段：{list(HK_DATABASE_FIELD_MAP.keys())}"
+        )
+
+    path = HK_DATABASE_DIR / HK_DATABASE_FIELD_MAP[field]
+    if not path.exists():
+        raise FileNotFoundError(f"[loader_hk] 港股文件不存在: {path}")
+
+    df = pd.read_csv(path, index_col=0, low_memory=False)
+    df.index = pd.to_datetime(df.index, format="mixed")
+    df.index.name = "date"
+    df = df.sort_index()
+    df = df.apply(pd.to_numeric, errors="coerce")
+
+    if start:
+        df = df.loc[start:]
+    if end:
+        df = df.loc[:end]
+
+    return df
+
+
+def load_data_hk(
+    fields: list,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> dict:
+    """
+    批量加载多个港股字段，返回字典。
+
+    Parameters
+    ----------
+    fields : list of str
+        字段名列表，例如 ["close_adj", "amt", "turn"]
+    start, end : str, optional
+        时间范围
+
+    Returns
+    -------
+    dict
+        {field_name: pd.DataFrame}
+    """
+    data = {}
+    for field in fields:
+        try:
+            data[field] = load_field_hk(field, start=start, end=end)
+            print(f"[loader_hk] ✓ {field:20s} shape={data[field].shape}")
+        except Exception as e:
+            warnings.warn(f"[loader_hk] ✗ {field}: {e}")
     return data
 
 

@@ -20,8 +20,8 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 
-from data.loader import load_data, to_monthly
-from config.settings import IPO_FILTER_DAYS
+from src.data.loader import load_data, load_data_hk, to_monthly
+from src.config.settings import IPO_FILTER_DAYS, PENNY_STOCK_PRICE_MIN
 
 
 # -----------------------------------------------------------------------------
@@ -101,6 +101,81 @@ def build_investable_mask(
     # --- 降频至月度 ---
     if freq == "M":
         # 月末取值：如果当月末该股票不可投资，则整月剔除
+        mask = mask.resample("ME").last().fillna(False)
+
+    return mask
+
+
+# -----------------------------------------------------------------------------
+# 港股专用：生成可投资掩码（仅依赖 close_adj）
+# -----------------------------------------------------------------------------
+
+def build_investable_mask_hk(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    freq: str = "D",
+) -> pd.DataFrame:
+    """
+    港股股票池可投资掩码（日度或月度）。
+
+    由于港股没有 A 股的 ST/status/listed_days 等专用状态字段，
+    仅依赖 close_adj 推断以下三项：
+
+    规则 1：交易日过滤
+        close_adj 有非 NaN 值 → 正常交易日（等价于 A 股 status==1）
+
+    规则 2：仙股过滤（等价于 A 股 ST 剔除）
+        close_adj >= PENNY_STOCK_PRICE_MIN（默认 HKD 1.0）
+        港交所对长期低于 0.5 港元的股票有退市机制，HKD 1.0 是保守阈值。
+
+    规则 3：次新股过滤（等价于 A 股 listed_days >= 60）
+        累计有效交易日数 >= IPO_FILTER_DAYS（默认 60 日）
+        使用 close_adj.notna().cumsum()，从有记录之日起累计。
+
+    Parameters
+    ----------
+    start, end : str, optional
+        时间范围，格式 "YYYY-MM-DD"
+    freq : str
+        "D"=日度掩码，"M"=月度掩码（取月末值）
+
+    Returns
+    -------
+    pd.DataFrame
+        布尔 DataFrame，index=DatetimeIndex，columns=港股代码
+        True=该股票在该日期可投资，False=需剔除
+    """
+    # 读取后复权收盘价（港股唯一状态代理变量）
+    # ── 关键：cumsum 必须从数据最早日期（2004-01-02）开始计算，
+    #    不能传入 start，否则 2007 年回测起点附近的新上市股票会
+    #    因累计天数不足 60 而被错误剔除。
+    #    计算完 cumsum 后，再把 mask 裁剪回 start/end 范围。
+    data = load_data_hk(["close_adj"], end=end)   # 不传 start，加载全量历史
+    close_adj = data.get("close_adj")
+
+    if close_adj is None or close_adj.empty:
+        raise ValueError("[universe_hk] 无法加载港股 close_adj，无法构建股票池掩码")
+
+    # 规则 1：正常交易日（有数据）
+    trading = close_adj.notna()
+
+    # 规则 2：非仙股（股价 >= HKD 1.0）
+    not_penny = close_adj >= PENNY_STOCK_PRICE_MIN
+
+    # 规则 3：非次新股（累计有效交易日 >= IPO_FILTER_DAYS）
+    # cumsum 从 2004-01-02 开始全量计算，保证 2007 年起点时各股已有足够历史
+    cum_trading_days = trading.cumsum()
+    not_new_listing  = cum_trading_days >= IPO_FILTER_DAYS
+
+    mask = trading & not_penny & not_new_listing
+
+    # 裁剪至请求的时间范围（cumsum 已在全量历史上计算，裁剪不影响结果）
+    if start:
+        mask = mask.loc[start:]
+    if end:
+        mask = mask.loc[:end]
+
+    if freq == "M":
         mask = mask.resample("ME").last().fillna(False)
 
     return mask

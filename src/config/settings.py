@@ -6,9 +6,9 @@
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
-# 项目根目录
+# 项目根目录（本文件位于 src/config/settings.py，故向上三级到 Quant 根）
 # -----------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # -----------------------------------------------------------------------------
 # 数据路径
@@ -18,37 +18,60 @@ PROJECT_ROOT = Path(__file__).parent.parent
 ARCHIVE_DATA_DIR = PROJECT_ROOT / "_archive" / "raw_data"
 
 # Database：iFinD/Wind 实时更新数据（2021-至今）
-DATABASE_DIR = Path("/Users/louisliu/Mirror/MyProjects/Database/data/stock/A")
+DATABASE_DIR = Path("/Users/louis/MyProjects/Database/data/stock/A")
+
+# Database：港股日度数据（iFinD，2004-01-02 至今）
+HK_DATABASE_DIR = Path("/Users/louis/MyProjects/Database/data/stock/HK")
 
 # 行业因子载荷（HDF5，用于行业中性化，来自原始框架）
 INDUSTRY_H5_PATH = ARCHIVE_DATA_DIR / "FactorLoading_Industry_arch.h5"
 
-# 回测结果输出目录（与 factors/、backtest/ 等模块平级）
+# 回测结果根目录（与 factors/、backtest/ 等模块平级）
+# 实际输出按市场分层：
+#   output/A/stats/   → A 股 CSV 统计文件
+#   output/A/img/     → A 股净值曲线图
+#   output/HK/stats/  → 港股 CSV 统计文件
+#   output/HK/img/    → 港股净值曲线图
+#   output/cache/     → 因子缓存（共享，不按市场分）
 FACTOR_OUTPUT_DIR = PROJECT_ROOT / "output"
 FACTOR_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 图片输出子目录
-IMG_OUTPUT_DIR = FACTOR_OUTPUT_DIR / "img"
-IMG_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
 # AF-pricing 因子方法参考路径（不复制代码，仅作来源注释）
-AF_PRICING_CODING_DIR = Path("/Users/louisliu/Mirror/MyProjects/AF-pricing/Coding")
+AF_PRICING_CODING_DIR = Path("/Users/louis/MyProjects/AF-pricing/Coding")
+
+# -----------------------------------------------------------------------------
+# 港股 Database 字段映射
+# 数据来源：iFinD，格式 index=日期, columns=股票代码（与 A 股 Database 相同）
+# 覆盖：close_adj / open_adj / high_adj / low_adj / volume / amt / turn
+# 注意：港股无 A 股的 ST / status / listed_days / PE / PB 等，
+#       Universe 过滤仅依赖 close_adj（见 data/universe.py build_investable_mask_hk）
+# -----------------------------------------------------------------------------
+HK_DATABASE_FIELD_MAP = {
+    "close_adj": "close_adj.csv",
+    "open_adj":  "open_adj.csv",
+    "high_adj":  "high_adj.csv",
+    "low_adj":   "low_adj.csv",
+    "volume":    "volume.csv",
+    "amt":       "amt.csv",
+    "turn":      "turn.csv",
+}
+
+# 港股仙股过滤：股价低于此值（HKD）的股票剔除（等价于 A 股 ST 剔除）
+PENNY_STOCK_PRICE_MIN = 1.0   # HKD
 
 # -----------------------------------------------------------------------------
 # 存档数据字段映射
 # 原始 CSV 格式：index=股票代码, columns=日期（转置格式）
+#
+# !! 重要说明（2026-05 修订）!!
+# Archive 来自 Wind，Database 来自 iFinD + Datayes，两个来源定义和复权算法不同。
+# Database 已覆盖 2003 年至今的完整历史（6077 只股票），因此：
+#   - 除 net_profit 外，所有字段均应使用 Database，不再混用 Archive。
+#   - 混用会导致同一字段在不同时间段来自不同数据源，造成拼接断层。
+#   - net_profit 是唯一的 Archive 专属字段（Database 无净利润数据）。
 # -----------------------------------------------------------------------------
 ARCHIVE_FIELD_MAP = {
-    "close_adj":      "后复权收盘价.csv",      # 后复权收盘价（用于收益率计算）
-    "open_adj":       "后复权开盘价.csv",       # 后复权开盘价（用于月初基准）
-    "close":          "不复权收盘价.csv",       # 不复权收盘价（用于市值计算）
-    "turn":           "换手率.csv",             # 换手率
-    "pb":             "PB.csv",                 # 市净率
-    "float_shares":   "流通股本.csv",           # 流通股本（股数）
-    "is_st":          "是否ST股.csv",           # ST 标记（1=ST，0=正常）
-    "trade_status":   "交易状态.csv",           # 交易状态（"交易"=正常）
-    "listing_days":   "上市交易日数.csv",       # 上市至今交易日数
-    "net_profit":     "归属母公司净利润.csv",   # 归母净利润（季度）
+    "net_profit":     "归属母公司净利润.csv",   # 归母净利润（季度），Archive 专属
 }
 
 # -----------------------------------------------------------------------------
