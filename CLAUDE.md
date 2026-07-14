@@ -63,20 +63,22 @@ Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结
 
 | 字段（loader 名） | 文件 | 覆盖范围 | 用途 |
 |---|---|---|---|
-| `close_adj` | `close_adj.csv` | 2003~今 / 6077只 | 月度收益率（分母） |
-| `open_adj` | `open_adj.csv` | 2003~今 / 6077只 | 月度收益率（分子） |
-| `close` | `close.csv` | 2003~今 / 6077只 | 市值计算 |
-| `turn` | `turn.csv` | 2003~今 / 6077只 | 换手率因子 |
-| `amt` | `amt.csv` | 2003~今 / 6077只 | Amihud 因子 |
-| `high` / `low` | `high.csv` / `low.csv` | 2003~今 / 6077只 | CS Spread / Roll Spread |
-| `high_adj` / `low_adj` | `high_adj.csv` / `low_adj.csv` | 2003~今 / 6077只 | 复权高低价因子 |
-| `is_st` | `st.csv` | 2004~今 / 6077只 | 股票池过滤（1=ST） |
-| `trade_status` | `status.csv` | 2004~今 / 6077只 | 股票池过滤（1=正常，0=停牌） |
-| `listing_days` | `listed_days.csv` | 2004~今 / 6077只 | 股票池过滤（次新股） |
-| `float_shares` | `free_float_shares.csv` | 2004~今 / 6077只 | 市值中性化 |
-| `pb` | `pb.csv` | 快照数据 | PB 因子（待补全） |
-| `pe_ttm` | `pe_ttm.csv` | 2023~今 | PE 因子 |
-| `dividend_ratio` | `dividend_ratio.csv` | 快照数据 | 股息率因子（待补全） |
+| `close_adj` | `close_adj.csv` | 2003~2026-07-10 / 6077只 | 月度收益率（分母） |
+| `open_adj` | `open_adj.csv` | 2003~2026-07-10 / 6077只 | 月度收益率（分子） |
+| `close` | `close.csv` | 2003~2026-07-10 / 6077只 | 市值计算 |
+| `turn` | `turn.csv` | 2003~2026-07-10 / 6077只 | 换手率因子 |
+| `amt` | `amt.csv` | 2003~2026-07-10 / 6077只 | Amihud 因子 |
+| `high` / `low` | `high.csv` / `low.csv` | 2003~2026-07-10 / 6077只 | CS Spread / Roll Spread |
+| `high_adj` / `low_adj` | `high_adj.csv` / `low_adj.csv` | 2003~2026-07-10 / 6077只 | 复权高低价因子 |
+| `is_st` | `st.csv` | 2004~2026-07-10 / 6077只 | 股票池过滤（1=ST） |
+| `trade_status` | `status.csv` | 2004~2026-07-10 / 6077只 | 股票池过滤（1=正常，0=停牌） |
+| `listing_days` | `listed_days.csv` | 2004~2026-07-03 / 6077只 | 股票池过滤（次新股） |
+| `float_shares` | `free_float_shares.csv` | 2004~2026-07-10 / 6077只 | 市值中性化 |
+| `pb` | `pb.csv` | 2004~2026-07-10 | PB 因子 |
+| `pe_ttm` | `pe_ttm.csv` | 2004~2026-07-10 | PE 因子 |
+| `dividend_ratio` | `dividend_ratio.csv` | 2004~2026-07-10 | 股息率因子 |
+| **FF3 月度** | `ff3_monthly.csv` | **2004-01-31 ~ 2026-07-31** | **市场/规模/价值因子（三因子模型）** |
+| **FF3 日度** | `ff3_daily.csv` | **2004-01-02 ~ 2026-07-10** | **日度 FF3 + 无风险利率** |
 
 ### 补充来源：存档（_archive/raw_data/）
 仅用于 `net_profit`（归母净利润，季度）字段，供 `net_profit_yoy` 因子使用。覆盖 2014~2021。
@@ -133,8 +135,8 @@ BACKTEST_CONFIG = {
 | `ps_liq_beta` | ps_gamma 先激活 + marketrtn_daily.csv |
 | `ap_betas` | marketrtn_daily.csv |
 | `capm_beta` | marketrtn_daily.csv |
-| `ivol` | FF3 日度因子（RiskPremium/HML/SMB）+ rf_daily.csv |
-| `ff3_betas` | FF3 日度因子 |
+| `ivol` | ✅ FF3 日度因子已就绪（Database/data/factors/）+ rf_daily.csv |
+| `ff3_betas` | ✅ FF3 日度因子已就绪（Database/data/factors/） |
 
 ---
 
