@@ -726,31 +726,236 @@ def _calc_capm_beta(data: dict) -> pd.DataFrame:
 
 def _calc_ivol(data: dict) -> pd.DataFrame:
     """
-    [待激活] 特质波动率 IVOL（FF3回归残差年化标准差）。
+    特质波动率 IVOL（FF3回归残差年化标准差）。
 
-    IVOL = √(SSE/(n-4)) × √252
-    12月滚动窗口 FF3 回归，最少 200 个有效交易日。
+    IVOL = √(SSE/(n-k)) × √252
+    12月滚动窗口 FF3 回归，最少 MIN_ROLLING_VALID_DAYS 个有效交易日。
 
-    需要数据：close（日度）、FF3 日度因子（RiskPremium/HML/SMB）、rf_daily
+    回归模型：r_i^e = α + β_mkt×MKT + β_hml×HML + β_smb×SMB + ε
+    其中 r_i^e = (r_i - rf) 为超额收益
+
+    需要数据：close（日度）、FF3 日度因子（MKT/HML/SMB）、rf_daily
     来源：[af] factorcal.py FactorIVFF
     """
-    raise NotImplementedError(
-        "[microstructure] IVOL 尚未激活。"
-        "请在 Database 中补充 FF3 日度因子（RiskPremium, HML, SMB）和无风险利率后启用。"
+    from pathlib import Path
+
+    # ── 加载日度收益率 ──────────────────────────────────────────
+    close = data.get("close_adj")
+    if close is None:
+        log.warning("[ivol] 缺少 close_adj 数据")
+        return pd.DataFrame()
+
+    ret_d = close.pct_change()
+
+    # ── 加载 FF3 日度因子 ────────────────────────────────────────
+    ff3_path = Path("/Users/louis/MyProjects/Database/data/factors/ff3_daily.csv")
+    if not ff3_path.exists():
+        log.warning(f"[ivol] FF3 文件不存在：{ff3_path}")
+        return pd.DataFrame()
+
+    ff3 = pd.read_csv(ff3_path, index_col=0, parse_dates=True)
+    ff3_cols = ['MKT', 'SMB', 'HML', 'Rf']
+    ff3 = ff3[ff3_cols]
+
+    # ── 对齐日期索引 ────────────────────────────────────────────
+    idx = ret_d.index.intersection(ff3.index)
+    ret_d = ret_d.loc[idx]
+    ff3 = ff3.loc[idx]
+
+    # ── 计算超额收益 ────────────────────────────────────────────
+    rf = ff3['Rf']
+    ret_excess = ret_d.sub(rf, axis=0)   # 每列减去对应日期的 Rf
+
+    # ── 准备因子矩阵（MKT, SMB, HML）────────────────────────────
+    factors = ff3[['MKT', 'SMB', 'HML']].copy()
+
+    # ── 月度滚动回归（12个月窗口） ──────────────────────────────
+    monthly_dates = pd.date_range(
+        start=ret_excess.index[0],
+        end=ret_excess.index[-1],
+        freq='ME'
     )
 
+    ivol_series = []
+    ivol_dates = []
 
-def _calc_ff3_betas(data: dict) -> Dict[str, pd.DataFrame]:
+    for month_end in monthly_dates:
+        # 12月滚动窗口：[month_end - 11 months, month_end]
+        window_start = month_end - pd.DateOffset(months=11)
+        window = ret_excess.index[(ret_excess.index >= window_start) & (ret_excess.index <= month_end)]
+
+        if len(window) < 200:  # 最少200个交易日
+            continue
+
+        ret_window = ret_excess.loc[window]
+        factors_window = factors.loc[window]
+
+        # 对每个股票做 FF3 回归
+        ivol_month = {}
+        for stock in ret_window.columns:
+            y = ret_window[stock].dropna()
+            X = factors_window.loc[y.index].copy()
+
+            # 添加常数项
+            X['const'] = 1.0
+            X = X[['const', 'MKT', 'SMB', 'HML']]
+
+            if len(y) < 20:  # 该窗口内该股票数据不足
+                continue
+
+            try:
+                # OLS 回归
+                model = LinearRegression()
+                model.fit(X.iloc[:, 1:], y)  # 不用 const，sklearn 自动添加
+
+                residuals = y - (model.intercept_ + model.predict(X.iloc[:, 1:]))
+
+                # IVOL = √(SSE/(n-k)) × √252，k=4（alpha + 3 betas）
+                n = len(residuals)
+                sse = (residuals ** 2).sum()
+                ivol = np.sqrt(sse / (n - 4)) * np.sqrt(252)
+
+                ivol_month[stock] = ivol
+            except Exception as e:
+                continue
+
+        if ivol_month:
+            ivol_series.append(pd.Series(ivol_month))
+            ivol_dates.append(month_end)
+
+    if not ivol_series:
+        return pd.DataFrame()
+
+    ivol_df = pd.DataFrame(ivol_series, index=ivol_dates)
+    return preprocess(ivol_df)
+
+
+def _calc_ff3_betas(data: dict) -> pd.DataFrame:
     """
-    [待激活] Fama-French 三因子 Beta（12月滚动 OLS）。
+    Fama-French 三因子 Beta（12月滚动 OLS）。
 
-    r_i^e = α + β_mkt×RP + β_hml×HML + β_smb×SMB + ε
-    输出三个 Beta DataFrame：beta_mkt, beta_hml, beta_smb
+    回归模型：r_i^e = α + β_mkt×MKT + β_hml×HML + β_smb×SMB + ε
+    其中 r_i^e = (r_i - rf) 为超额收益
 
-    需要数据：close（日度）、FF3 日度因子、rf_daily
+    输出 DataFrame 包含三列：
+      - beta_mkt: 市场 Beta（MKT 的回归系数）
+      - beta_smb: 规模 Beta（SMB 的回归系数）
+      - beta_hml: 价值 Beta（HML 的回归系数）
+
+    注：返回值为合并 DataFrame，主因子为 beta_mkt（市场 Beta）
+
+    需要数据：close（日度）、FF3 日度因子（MKT/HML/SMB）、rf_daily
     来源：[af] factorcal.py FactorBetaFF3
     """
-    raise NotImplementedError(
-        "[microstructure] FF3 Betas 尚未激活。"
-        "请在 Database 中补充 FF3 日度因子和无风险利率后启用。"
+    from pathlib import Path
+
+    # ── 加载日度收益率 ──────────────────────────────────────────
+    close = data.get("close_adj")
+    if close is None:
+        log.warning("[ff3_betas] 缺少 close_adj 数据")
+        return {}
+
+    ret_d = close.pct_change()
+
+    # ── 加载 FF3 日度因子 ────────────────────────────────────────
+    ff3_path = Path("/Users/louis/MyProjects/Database/data/factors/ff3_daily.csv")
+    if not ff3_path.exists():
+        log.warning(f"[ff3_betas] FF3 文件不存在：{ff3_path}")
+        return {}
+
+    ff3 = pd.read_csv(ff3_path, index_col=0, parse_dates=True)
+    ff3_cols = ['MKT', 'SMB', 'HML', 'Rf']
+    ff3 = ff3[ff3_cols]
+
+    # ── 对齐日期索引 ────────────────────────────────────────────
+    idx = ret_d.index.intersection(ff3.index)
+    ret_d = ret_d.loc[idx]
+    ff3 = ff3.loc[idx]
+
+    # ── 计算超额收益 ────────────────────────────────────────────
+    rf = ff3['Rf']
+    ret_excess = ret_d.sub(rf, axis=0)
+
+    # ── 准备因子矩阵（MKT, SMB, HML）────────────────────────────
+    factors = ff3[['MKT', 'SMB', 'HML']].copy()
+
+    # ── 月度滚动回归（12个月窗口） ──────────────────────────────
+    monthly_dates = pd.date_range(
+        start=ret_excess.index[0],
+        end=ret_excess.index[-1],
+        freq='ME'
     )
+
+    beta_mkt_series = []
+    beta_smb_series = []
+    beta_hml_series = []
+    beta_dates = []
+
+    for month_end in monthly_dates:
+        # 12月滚动窗口
+        window_start = month_end - pd.DateOffset(months=11)
+        window = ret_excess.index[(ret_excess.index >= window_start) & (ret_excess.index <= month_end)]
+
+        if len(window) < 200:
+            continue
+
+        ret_window = ret_excess.loc[window]
+        factors_window = factors.loc[window]
+
+        # 对每个股票做 FF3 回归
+        betas_month_mkt = {}
+        betas_month_smb = {}
+        betas_month_hml = {}
+
+        for stock in ret_window.columns:
+            y = ret_window[stock].dropna()
+            X = factors_window.loc[y.index].copy()
+
+            if len(y) < 20:
+                continue
+
+            try:
+                # OLS 回归
+                model = LinearRegression()
+                model.fit(X, y)
+
+                # 提取三个因子的 Beta（回归系数）
+                # model.coef_ 顺序为 ['MKT', 'SMB', 'HML']
+                betas_month_mkt[stock] = model.coef_[0]
+                betas_month_smb[stock] = model.coef_[1]
+                betas_month_hml[stock] = model.coef_[2]
+            except Exception as e:
+                continue
+
+        if betas_month_mkt:
+            beta_mkt_series.append(pd.Series(betas_month_mkt))
+            beta_smb_series.append(pd.Series(betas_month_smb))
+            beta_hml_series.append(pd.Series(betas_month_hml))
+            beta_dates.append(month_end)
+
+    if not beta_mkt_series:
+        return pd.DataFrame()
+
+    # ── 转换为 DataFrame 并预处理 ──────────────────────────────
+    beta_mkt_df = pd.DataFrame(beta_mkt_series, index=beta_dates)
+    beta_smb_df = pd.DataFrame(beta_smb_series, index=beta_dates)
+    beta_hml_df = pd.DataFrame(beta_hml_series, index=beta_dates)
+
+    # 合并三个 beta 为单个 DataFrame（作为多列因子）
+    # 主列为 beta_mkt（市场 Beta），其他两列为辅助
+    combined = pd.concat([
+        beta_mkt_df.rename(columns=lambda x: f'beta_mkt_{x}'),
+        beta_smb_df.rename(columns=lambda x: f'beta_smb_{x}'),
+        beta_hml_df.rename(columns=lambda x: f'beta_hml_{x}'),
+    ], axis=1)
+
+    # 取第一个 beta（MKT）作为主因子返回，用于标准回测流程
+    # 其他 beta 保留在 DataFrame 的其他列中供选择性使用
+    result = preprocess(beta_mkt_df)
+    # 附加其他列供后续参考
+    result.attrs['beta_smb'] = beta_smb_df
+    result.attrs['beta_hml'] = beta_hml_df
+
+    return result
+
+

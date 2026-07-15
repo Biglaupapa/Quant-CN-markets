@@ -216,9 +216,9 @@ FACTOR_FLAGS = {
     # [需补充数据] marketrtn_daily.csv
     "capm_beta":                 False,   # CAPM 市场 Beta（240日滚动）
 
-    # [需补充数据] FF3 日度因子（RiskPremium/HML/SMB）+ rf_daily.csv
-    "ivol":                      False,   # 特质波动率（FF3 残差年化标准差）
-    "ff3_betas":                 False,   # FF3 三因子 Beta
+    # [已补充] FF3 日度因子 + rf_daily.csv（2026-07-15 就绪）
+    "ivol":                      True,    # 特质波动率（FF3 残差年化标准差）
+    "ff3_betas":                 True,    # FF3 三因子 Beta
 }
 
 # =============================================================================
