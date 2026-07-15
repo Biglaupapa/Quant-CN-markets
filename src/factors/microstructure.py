@@ -724,7 +724,7 @@ def _calc_capm_beta(data: dict) -> pd.DataFrame:
     )
 
 
-def _calc_ivol(data: dict) -> pd.DataFrame:
+def _calc_ivol(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
     """
     特质波动率 IVOL（FF3回归残差年化标准差）。
 
@@ -740,6 +740,7 @@ def _calc_ivol(data: dict) -> pd.DataFrame:
     from pathlib import Path
 
     # ── 加载日度收益率 ──────────────────────────────────────────
+    data = load_data(start=start, end=end)
     close = data.get("close_adj")
     if close is None:
         log.warning("[ivol] 缺少 close_adj 数据")
@@ -830,7 +831,7 @@ def _calc_ivol(data: dict) -> pd.DataFrame:
     return preprocess(ivol_df)
 
 
-def _calc_ff3_betas(data: dict) -> pd.DataFrame:
+def _calc_ff3_betas(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
     """
     Fama-French 三因子 Beta（12月滚动 OLS）。
 
@@ -850,6 +851,7 @@ def _calc_ff3_betas(data: dict) -> pd.DataFrame:
     from pathlib import Path
 
     # ── 加载日度收益率 ──────────────────────────────────────────
+    data = load_data(start=start, end=end)
     close = data.get("close_adj")
     if close is None:
         log.warning("[ff3_betas] 缺少 close_adj 数据")
