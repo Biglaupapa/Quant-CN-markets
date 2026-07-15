@@ -7,20 +7,38 @@
 
 ## 快速开始
 
+### 前置条件：确保 FF3 因子已构建
+
+```bash
+cd /Users/louis/MyProjects/Quant
+# 查看 FF3 状态
+python -m src.ff3_builder --dry-run
+
+# 如果需要重建 FF3（数据更新后）
+python -m src.ff3_builder
+```
+
+### 运行回测
+
 ```bash
 # 激活共享环境（上层目录 venv，Python 3.13）
 source /Users/louis/MyProjects/venv/bin/activate
 
-# 运行回测（在 src/main.py 中将需要的因子 FACTOR_FLAGS 设为 True）
+# 运行回测
 # 注意：以包方式运行，须在 Quant/ 根目录执行
 cd /Users/louis/MyProjects/Quant
 python -m src.main
 ```
 
-代码以 `src/` 包形式组织，内部统一使用 `from src.xxx import ...` 绝对导入，
-因此必须用 `python -m src.main` 运行（不能 `python src/main.py`）。
-回测结果保存至 `output/`，净值曲线图保存至 `output/A/img/`、`output/HK/img/`。
-依赖见 `requirements.txt`。
+代码以 `src/` 包形式组织，内部统一使用 `from src.xxx import ...` 绝对导入。
+必须用 `python -m src.main` 运行（不能 `python src/main.py`）。
+
+**输出位置**：
+- 回测结果 CSV：`output/A/stats/` 和 `output/HK/stats/`
+- 净值曲线图：`output/A/img/` 和 `output/HK/img/`
+- 因子缓存：`output/cache/`（命中缓存则跳过计算）
+
+**依赖**：见 `requirements.txt`
 
 ---
 
@@ -123,6 +141,8 @@ BACKTEST_CONFIG = {
 | `roll_spread` | Roll 价差 | 无 | 负 |
 | `overnight_ret` | 隔夜收益率（月均） | 无 | 正 |
 | `volatility_30` | 短期波动率（30日） | 无 | 负 |
+| **`ivol`** | **特质波动率（FF3残差年化）** | **无** | **正** |
+| **`ff3_betas`** | **市场 Beta（β_MKT）** | **无** | **正** |
 
 ### 基本面因子
 
@@ -163,9 +183,17 @@ Database 数据由 `Database/codes/ifind.py` 和 `Database/codes/datayes.py` 维
 
 ---
 
+## 因子激活状态（2026-07-15 更新）
+
+✅ **新激活因子**：`ivol`（特质波动率）、`ff3_betas`（三因子Beta）
+- 所有必需数据已就绪（FF3 日度因子 + 无风险利率）
+- 已集成到因子框架，运行 `python -m src.main` 自动计算
+- 预期下次回测会包含这两个因子的单因子和合成结果
+
 ## 已有回测结果（2007-01 ~ 2026-03，五分组，231个月）
 
-> 注：以下为最新运行结果（v2，10因子合成）。重新运行后 output/ 目录下 CSV 自动更新。
+> 注：以下为最新运行结果（v2，10因子合成，不含新激活的 ivol/ff3_betas）。
+> 重新运行后 output/ 目录下 CSV 自动更新。
 
 **单因子（按 |ICIR| 降序，合成候选标注 ✅）**
 
