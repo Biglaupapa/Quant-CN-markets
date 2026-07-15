@@ -740,7 +740,7 @@ def _calc_ivol(start: Optional[str] = None, end: Optional[str] = None) -> pd.Dat
     from pathlib import Path
 
     # ── 加载日度收益率 ──────────────────────────────────────────
-    data = load_data(start=start, end=end)
+    data = load_data(["close_adj"], start=start, end=end)
     close = data.get("close_adj")
     if close is None:
         log.warning("[ivol] 缺少 close_adj 数据")
@@ -851,7 +851,7 @@ def _calc_ff3_betas(start: Optional[str] = None, end: Optional[str] = None) -> p
     from pathlib import Path
 
     # ── 加载日度收益率 ──────────────────────────────────────────
-    data = load_data(start=start, end=end)
+    data = load_data(["close_adj"], start=start, end=end)
     close = data.get("close_adj")
     if close is None:
         log.warning("[ff3_betas] 缺少 close_adj 数据")
