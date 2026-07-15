@@ -6,6 +6,8 @@ A 股量化因子研究平台，支持因子构建、股票池过滤、分组回
 
 ## 快速开始
 
+### 运行回测
+
 ```bash
 source /Users/louis/MyProjects/venv/bin/activate   # 共享 venv，Python 3.13
 cd /Users/louis/MyProjects/Quant
@@ -16,6 +18,21 @@ python -m src.main                                  # 以包方式运行（须�
 
 控制哪些因子参与回测：修改 `src/main.py` 顶部的 `FACTOR_FLAGS` 字典（`True` = 计算，`False` = 跳过）。
 
+### 构建 FF3 因子
+
+当 Database 数据更新后，手动运行 FF3 构建程序：
+
+```bash
+python -m src.ff3_builder                          # 全量重建 FF3 因子
+python -m src.ff3_builder --dry-run                # 查看当前 FF3 文件状态
+```
+
+**工作流**：
+1. 修改 Database 中的量价数据或宏观数据（bond_yield_1y）
+2. 运行 `python -m src.ff3_builder` 构建 FF3
+3. FF3 输出到 `/Users/louis/MyProjects/Database/data/factors/`
+4. 运行 `python -m src.main` 执行回测（自动读取最新 FF3）
+
 ---
 
 ## 项目结构
@@ -24,9 +41,10 @@ python -m src.main                                  # 以包方式运行（须�
 Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结果不跟踪）
 ├── requirements.txt         # 依赖说明（共用上层 venv）
 ├── README.md  CLAUDE.md  .gitignore
-├── src/                     # ★ 源码包，入口 python -m src.main
+├── src/                     # ★ 源码包
 │   ├── __init__.py
-│   ├── main.py              # ★ 唯一运行入口
+│   ├── main.py              # ★ 回测入口（python -m src.main）
+│   ├── ff3_builder.py       # ★ FF3 因子构建（python -m src.ff3_builder）
 │   ├── convert_report_to_pdf.py
 │   ├── config/settings.py   # 全局路径、字段映射、因子参数
 │   ├── data/
@@ -77,6 +95,8 @@ Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结
 | `pb` | `pb.csv` | 2004~2026-07-10 | PB 因子 |
 | `pe_ttm` | `pe_ttm.csv` | 2004~2026-07-10 | PE 因子 |
 | `dividend_ratio` | `dividend_ratio.csv` | 2004~2026-07-10 | 股息率因子 |
+| **bond_yield_1y** | `bond_yield_1y.csv` | **2004-01-02 ~ 2026-07-10** | **日度国债收益率（% 形式）** |
+| **rf_daily** | `rf_daily.csv` | **2004-01-02 ~ 2026-07-10** | **日度无风险利率（小数形式，252交易日年化）** |
 | **FF3 月度** | `ff3_monthly.csv` | **2004-01-31 ~ 2026-07-31** | **市场/规模/价值因子（三因子模型）** |
 | **FF3 日度** | `ff3_daily.csv` | **2004-01-02 ~ 2026-07-10** | **日度 FF3 + 无风险利率** |
 
@@ -129,14 +149,14 @@ BACKTEST_CONFIG = {
 
 ### 待激活因子（需额外数据）
 
-| 因子 | 缺少数据 |
-|---|---|
-| `ps_gamma` | marketrtn_daily.csv（日度市场收益率） |
-| `ps_liq_beta` | ps_gamma 先激活 + marketrtn_daily.csv |
-| `ap_betas` | marketrtn_daily.csv |
-| `capm_beta` | marketrtn_daily.csv |
-| `ivol` | ✅ FF3 日度因子已就绪（Database/data/factors/）+ rf_daily.csv |
-| `ff3_betas` | ✅ FF3 日度因子已就绪（Database/data/factors/） |
+| 因子 | 状态 | 所需数据 |
+|---|---|---|
+| `ps_gamma` | ❌ | marketrtn_daily.csv（日度市场收益率） |
+| `ps_liq_beta` | ❌ | ps_gamma 先激活 + marketrtn_daily.csv |
+| `ap_betas` | ❌ | marketrtn_daily.csv |
+| `capm_beta` | ❌ | marketrtn_daily.csv |
+| **`ivol`** | **✅ 就绪** | **FF3 日度 + rf_daily（2026-07-15 已补全）** |
+| **`ff3_betas`** | **✅ 就绪** | **FF3 日度 + rf_daily（2026-07-15 已补全）** |
 
 ---
 
