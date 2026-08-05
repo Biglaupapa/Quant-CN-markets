@@ -79,26 +79,53 @@ Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结
 ### 主数据源：Database
 路径：`/Users/louis/MyProjects/Database/data/stock/A/`
 
-| 字段（loader 名） | 文件 | 覆盖范围 | 用途 |
+> **⚠️ 2026-08 数据源变更**：A 股 19 个字段已由 iFinD/Datayes 切换到 **Choice**。
+> 起点由 2003-01-02 改为 **2005-01-04**（`settings.py` 的 `DB_START` 需同步改），
+> 股票列由 6077 改为 **5855**（时点并集，无幸存者偏差）。
+> 详见 `Database/docs/【主文档】框架全景记录与Choice迁移方案.md`。
+
+**Choice 供给（19 个，覆盖 2005-01-04 ~ 2026-08-05 / 5855 只 / 5231 个交易日）**
+
+| 字段（loader 名） | 文件 | 用途 |
+|---|---|---|
+| `close_adj` / `open_adj` | `close_adj.csv` / `open_adj.csv` | 月度收益率 |
+| `high_adj` / `low_adj` | `high_adj.csv` / `low_adj.csv` | 复权高低价因子 |
+| `close` | `close.csv` | 市值计算（= `MV/TOTALSHARE`，精确恒等） |
+| `open` / `high` / `low` | 对应 csv | 不复权价（`USE_ADJ_PRICE=False` 时） |
+| `turn` | `turn.csv` | 换手率因子（= `VOLUME/LIQSHARE×100`，全精度） |
+| `amt` / `volume` | `amt.csv` / `volume.csv` | Amihud 因子 |
+| `is_st` | `st.csv` | 股票池过滤（`ISSTSTOCK` **或** `ISXSTSTOCK`） |
+| `trade_status` | `status.csv` | 股票池过滤（1=有成交，0=停牌） |
+| `float_shares` | `free_float_shares.csv` | 市值中性化 |
+| `market_value` / `neg_market_value` | 对应 csv | Size / Size2 因子 |
+| — | `xst.csv` | **新增**：单独的 \*ST 标记，loader 尚未映射 |
+| — | `vwap.csv` / `vwap_adj.csv` | 本框架未使用 |
+
+**Datayes 供给（4 个，覆盖至 2026-07-17）**
+
+| 字段 | 文件 | 用途 | 备注 |
 |---|---|---|---|
-| `close_adj` | `close_adj.csv` | 2003~2026-07-10 / 6077只 | 月度收益率（分母） |
-| `open_adj` | `open_adj.csv` | 2003~2026-07-10 / 6077只 | 月度收益率（分子） |
-| `close` | `close.csv` | 2003~2026-07-10 / 6077只 | 市值计算 |
-| `turn` | `turn.csv` | 2003~2026-07-10 / 6077只 | 换手率因子 |
-| `amt` | `amt.csv` | 2003~2026-07-10 / 6077只 | Amihud 因子 |
-| `high` / `low` | `high.csv` / `low.csv` | 2003~2026-07-10 / 6077只 | CS Spread / Roll Spread |
-| `high_adj` / `low_adj` | `high_adj.csv` / `low_adj.csv` | 2003~2026-07-10 / 6077只 | 复权高低价因子 |
-| `is_st` | `st.csv` | 2004~2026-07-10 / 6077只 | 股票池过滤（1=ST） |
-| `trade_status` | `status.csv` | 2004~2026-07-10 / 6077只 | 股票池过滤（1=正常，0=停牌） |
-| `listing_days` | `listed_days.csv` | 2004~2026-07-03 / 6077只 | 股票池过滤（次新股） |
-| `float_shares` | `free_float_shares.csv` | 2004~2026-07-10 / 6077只 | 市值中性化 |
-| `pb` | `pb.csv` | 2004~2026-07-10 | PB 因子 |
-| `pe_ttm` | `pe_ttm.csv` | 2004~2026-07-10 | PE 因子 |
-| `dividend_ratio` | `dividend_ratio.csv` | 2004~2026-07-10 | 股息率因子 |
-| **bond_yield_1y** | `bond_yield_1y.csv` | **2004-01-02 ~ 2026-07-10** | **日度国债收益率（% 形式）** |
-| **rf_daily** | `rf_daily.csv` | **2004-01-02 ~ 2026-07-10** | **日度无风险利率（小数形式，252交易日年化）** |
-| **FF3 月度** | `ff3_monthly.csv` | **2004-01-31 ~ 2026-07-31** | **市场/规模/价值因子（三因子模型）** |
-| **FF3 日度** | `ff3_daily.csv` | **2004-01-02 ~ 2026-07-10** | **日度 FF3 + 无风险利率** |
+| `pb` | `pb.csv` | PB 因子 | Choice 的 `PB` 口径与此相差 8~29%，未切换 |
+| `pe_ttm` | `pe_ttm.csv` | PE 因子 | Choice 的 `PETTM` 已验证逐位相等，可随时切 |
+| `pe1` | `pe1.csv` | 动态 PE | **Choice 无对应字段** |
+| `dividend_ratio` | `dividend_ratio.csv` | 股息率因子 | Choice 的 `LASTESTDIVIDEND` 更完整，可随时切 |
+
+**iFinD 供给（1 个）**
+
+| 字段 | 文件 | 用途 | ⚠️ 已知问题 |
+|---|---|---|---|
+| `listing_days` | `listed_days.csv` | 股票池过滤（次新股） | 列 5828（**比 Choice 少 48 只**）、止于 **2026-07-17**（落后 8 天）。`build_investable_mask` 取三者列交集 = 5803，且末端日期会被静默剔除 |
+
+**宏观与因子**
+
+| 字段 | 文件 | 覆盖 | 用途 |
+|---|---|---|---|
+| `bond_yield_1y` | `macro/bond_yield_1y.csv` | 2004-01-02 ~ 2026-07-17 | 日度国债收益率（% 形式）→ `ff3_builder` 现算 Rf |
+| FF3 月度 | `factors/ff3_monthly.csv` | 待用新数据重建 | 市场/规模/价值因子 |
+| FF3 日度 | `factors/ff3_daily.csv` | 待用新数据重建 | 日度 FF3 + `Rf` 列 |
+
+> `rf_daily.csv` **已于 2026-08-05 删除**。它是 `bond_yield_1y/100/252` 的派生（5630 点逐点全等），
+> 带表头 bug，且全库无任何代码读取——IVOL / ff3_betas 实际读的是 `ff3_daily.csv` 的 `Rf` 列。
 
 ### 补充来源：存档（_archive/raw_data/）
 仅用于 `net_profit`（归母净利润，季度）字段，供 `net_profit_yoy` 因子使用。覆盖 2014~2021。
