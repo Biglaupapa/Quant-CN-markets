@@ -14,7 +14,8 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from sklearn.linear_model import LinearRegression
+# 2026-08 起三个中性化函数改用 np.linalg.lstsq（与 sklearn 同为 SVD 最小二乘，
+# 数学等价、无对象创建开销），不再依赖 sklearn。
 from typing import Optional, List
 import warnings
 
@@ -122,28 +123,44 @@ def neutralize_by_size(
     pd.DataFrame
         市值中性化后的因子值（残差）
     """
-    result = factor.copy() * np.nan
-    reg    = LinearRegression()
-
     common_idx  = factor.index.intersection(log_mktcap.index)
     common_cols = factor.columns.intersection(log_mktcap.columns)
 
-    for date in common_idx:
-        y    = factor.loc[date, common_cols]
-        x    = log_mktcap.loc[date, common_cols]
-        mask = y.notna() & x.notna()
+    Y = factor.loc[common_idx, common_cols]
+    X = log_mktcap.loc[common_idx, common_cols]
 
-        if mask.sum() < MIN_ROLLING_VALID_DAYS:
-            continue
+    # ── 向量化说明 ────────────────────────────────────────────────
+    # 原实现是逐日期 `LinearRegression().fit()`（260 期 × 每个中性化因子）。
+    # 单变量 OLS 有闭式解，无需迭代求解器：
+    #     β = Cov(x, y) / Var(x)      α = ȳ - β·x̄
+    #     resid = y - (α + β·x) = (y - ȳ) - β·(x - x̄)
+    # 与 sklearn 数学等价（sklearn 内部同样是最小二乘正规方程），
+    # 差异仅在浮点累加顺序，量级 ~1e-15。
+    #
+    # 两侧的均值都只在「x、y 同时非空」的截面上计算，与原来的
+    # mask = y.notna() & x.notna() 完全一致。
+    mask = Y.notna() & X.notna()
+    Ym = Y.where(mask)
+    Xm = X.where(mask)
 
-        y_clean = y[mask].values.reshape(-1, 1)
-        x_clean = x[mask].values.reshape(-1, 1)
+    n = mask.sum(axis=1)
+    ybar = Ym.mean(axis=1)
+    xbar = Xm.mean(axis=1)
 
-        reg.fit(x_clean, y_clean)
-        residuals = y_clean.flatten() - reg.predict(x_clean).flatten()
+    dy = Ym.sub(ybar, axis=0)
+    dx = Xm.sub(xbar, axis=0)
 
-        result.loc[date, common_cols[mask]] = residuals
+    with np.errstate(invalid="ignore", divide="ignore"):
+        beta = (dx * dy).sum(axis=1) / (dx ** 2).sum(axis=1)
 
+    resid = dy.sub(dx.mul(beta, axis=0))
+
+    # 有效样本不足的日期整行置 NaN（原实现是 continue，即保持全 NaN）
+    resid[n < MIN_ROLLING_VALID_DAYS] = np.nan
+
+    # 输出对齐回原始形状：只在 mask 位置有值，其余 NaN
+    result = factor.copy() * np.nan
+    result.loc[common_idx, common_cols] = resid.where(mask)
     return result
 
 
@@ -174,14 +191,21 @@ def neutralize_by_industry(
         return factor
 
     result = factor.copy() * np.nan
-    reg    = LinearRegression()
 
+    # ── 优化说明 ──────────────────────────────────────────────────
+    # 原实现把 `store[key]` 放在「日期 × 行业」双重循环内部，
+    # 每个日期都把整个 HDF5 的所有行业表重读一遍——IO 是主要开销。
+    # 现改为循环外一次性载入内存；回归用 lstsq 取代 sklearn。
+    # 数学等价（同为最小二乘），差异仅浮点累加顺序。
     try:
-        store = pd.HDFStore(str(industry_h5_path), mode="r")
-        keys  = store.keys()
+        with pd.HDFStore(str(industry_h5_path), mode="r") as store:
+            industry_tables = {k: store[k] for k in store.keys()}
     except Exception as e:
         warnings.warn(f"[base] 无法打开行业 H5 文件: {e}")
         return factor
+
+    if not industry_tables:
+        return result
 
     for date in factor.index:
         date_str = date.strftime("%Y-%m-%d")
@@ -190,21 +214,16 @@ def neutralize_by_industry(
         if len(y) < MIN_ROLLING_VALID_DAYS:
             continue
 
-        # 从 HDF5 中收集该日期的行业哑变量
-        industry_dummies = []
-        for key in keys:
-            try:
-                ind_df = store[key]
-                if date_str in ind_df.index:
-                    row = ind_df.loc[date_str]
-                    industry_dummies.append(row.reindex(y.index).fillna(0))
-            except Exception:
-                continue
-
+        # 从内存中收集该日期的行业哑变量
+        industry_dummies = [
+            tbl.loc[date_str].reindex(y.index).fillna(0)
+            for tbl in industry_tables.values()
+            if date_str in tbl.index
+        ]
         if not industry_dummies:
             continue
 
-        X = pd.DataFrame(industry_dummies).T  # shape: (n_stocks, n_industries)
+        X = pd.DataFrame(industry_dummies).T          # (n_stocks, n_industries)
         X = X.reindex(y.index).fillna(0)
 
         # 去掉全零列（该日期无该行业股票）
@@ -212,14 +231,14 @@ def neutralize_by_industry(
         if X.shape[1] == 0:
             continue
 
+        # sklearn 默认 fit_intercept=True，等价于在设计矩阵中加一列常数
+        Xd = np.column_stack([np.ones(len(y)), X.values])
         try:
-            reg.fit(X.values, y.values)
-            residuals = y.values - reg.predict(X.values)
-            result.loc[date, y.index] = residuals
+            beta, *_ = np.linalg.lstsq(Xd, y.values, rcond=None)
+            result.loc[date, y.index] = y.values - Xd @ beta
         except Exception:
             continue
 
-    store.close()
     return result
 
 
@@ -252,14 +271,14 @@ def neutralize_by_size_and_industry(
         return neutralize_by_size(factor, log_mktcap)
 
     result = factor.copy() * np.nan
-    reg    = LinearRegression()
 
     common_idx  = factor.index.intersection(log_mktcap.index)
     common_cols = factor.columns.intersection(log_mktcap.columns)
 
+    # 同 neutralize_by_industry：HDF5 一次性载入内存，避免在双重循环里反复读盘
     try:
-        store = pd.HDFStore(str(industry_h5_path), mode="r")
-        keys  = store.keys()
+        with pd.HDFStore(str(industry_h5_path), mode="r") as store:
+            industry_tables = {k: store[k] for k in store.keys()}
     except Exception as e:
         warnings.warn(f"[base] 无法打开行业 H5 文件: {e}，退化为仅市值中性化。")
         return neutralize_by_size(factor, log_mktcap)
@@ -276,16 +295,12 @@ def neutralize_by_size_and_industry(
         y_s    = y[mask]
         size_s = size[mask]
 
-        # 行业哑变量
-        industry_dummies = []
-        for key in keys:
-            try:
-                ind_df = store[key]
-                if date_str in ind_df.index:
-                    row = ind_df.loc[date_str]
-                    industry_dummies.append(row.reindex(y_s.index).fillna(0))
-            except Exception:
-                continue
+        # 行业哑变量（从内存取）
+        industry_dummies = [
+            tbl.loc[date_str].reindex(y_s.index).fillna(0)
+            for tbl in industry_tables.values()
+            if date_str in tbl.index
+        ]
 
         # 构建 X 矩阵：[log_mktcap | industry_dummies]
         X = pd.DataFrame({"log_mktcap": size_s})
@@ -294,14 +309,14 @@ def neutralize_by_size_and_industry(
             ind_df_cross = ind_df_cross.loc[:, ind_df_cross.sum() > 0]
             X = pd.concat([X, ind_df_cross], axis=1)
 
+        # sklearn 默认 fit_intercept=True → 设计矩阵补一列常数
+        Xd = np.column_stack([np.ones(len(y_s)), X.values])
         try:
-            reg.fit(X.values, y_s.values)
-            residuals = y_s.values - reg.predict(X.values)
-            result.loc[date, y_s.index] = residuals
+            beta, *_ = np.linalg.lstsq(Xd, y_s.values, rcond=None)
+            result.loc[date, y_s.index] = y_s.values - Xd @ beta
         except Exception:
             continue
 
-    store.close()
     return result
 
 

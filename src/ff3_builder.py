@@ -33,7 +33,7 @@ from pathlib import Path
 DB_DATA_DIR      = Path("/Users/louis/MyProjects/Database/data/stock/A")
 DB_MACRO_DIR     = Path("/Users/louis/MyProjects/Database/data/macro")
 DB_FACTORS_DIR   = Path("/Users/louis/MyProjects/Database/data/factors")
-STOCKS_LIST_PATH = DB_DATA_DIR / "stocks_list.csv"
+# STOCKS_LIST_PATH 已废弃（2026-08）：股票池改从宽表列名按后缀推导，见 build_ff3()
 
 # 创建输出目录
 DB_FACTORS_DIR.mkdir(parents=True, exist_ok=True)
@@ -298,11 +298,17 @@ def build_ff3():
     t_start = time.time()
 
     # ── 股票池 ────────────────────────────────────────────────
-    stocks_df   = pd.read_csv(STOCKS_LIST_PATH)
-    sh_codes    = set(stocks_df[stocks_df['exchange'] == 'SH']['code'])
-    sz_codes    = set(stocks_df[stocks_df['exchange'] == 'SZ']['code'])
+    # 2026-08 起：直接从宽表列名按后缀取 SH+SZ（排除 BJ），不再读外部 stocks_list。
+    # 原因：A 股数据源迁移到 Choice 后，股票池由逐日 sector("001071") 的时点截面决定，
+    #       stocks_list 已从「抓取输入」降级为「长表派生输出」，不再是权威名单；
+    #       且原路径 data/stock/A/stocks_list.csv 早已随目录调整失效。
+    all_cols    = pd.read_csv(DB_DATA_DIR / "close_adj.csv", index_col=0, nrows=0).columns
+    sh_codes    = {c for c in all_cols if c.endswith(".SH")}
+    sz_codes    = {c for c in all_cols if c.endswith(".SZ")}
     sh_sz_codes = sh_codes | sz_codes
-    log.info(f"股票池：SH {len(sh_codes)} + SZ {len(sz_codes)} = {len(sh_sz_codes)} 只")
+    n_bj        = sum(1 for c in all_cols if c.endswith(".BJ"))
+    log.info(f"股票池：SH {len(sh_codes)} + SZ {len(sz_codes)} = {len(sh_sz_codes)} 只"
+             f"（已排除 BJ {n_bj} 只）")
 
     # ── 加载数据 ──────────────────────────────────────────────
     d = load_data(sh_sz_codes)

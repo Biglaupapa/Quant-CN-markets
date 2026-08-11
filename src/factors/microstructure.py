@@ -543,32 +543,51 @@ def calc_roll_spread(
     frames = []
     dates  = []
 
+    # ── 向量化说明 ────────────────────────────────────────────────
+    # 原实现是「月 × 股票」双重循环（260 × 5855 ≈ 150 万次 np.cov）。
+    #
+    # 关键细节：原来是 `s = group[col].dropna()` 后再配 s[1:] 与 s[:-1]，
+    # 即**按非空序列相邻配对**，而不是按日历相邻。若直接用 shift(1) 会
+    # 把停牌日也算进去，结果不同。
+    #
+    # 恰好等价的向量化写法：`ffill().shift(1)` 在每个非空位置上给出的
+    # 正是「上一个非空值」——与 dropna 后错位一位完全一致。
+    #     Y     = [1, NaN, 3, 4]
+    #     ffill = [1,  1,  3, 4]  → shift(1) = [NaN, 1, 1, 3]
+    #     有效位 (0,2,3) 上的配对：(3,1)、(4,3)，与 dropna 后的 s 相同。
+    #
+    # 协方差沿用 np.cov 的 ddof=1，且两侧各自去均值（原实现即如此）。
     for period_end, group in ret.resample("ME"):
         if len(group) < MIN_ROLLING_VALID_DAYS:
             frames.append(pd.Series(np.nan, index=group.columns))
             dates.append(period_end)
             continue
 
-        # 协方差：r_t 与 r_{t-1}
-        cov_row = {}
-        for col in group.columns:
-            s = group[col].dropna()
-            if len(s) < MIN_ROLLING_VALID_DAYS:
-                cov_row[col] = np.nan
-                continue
-            cov = np.cov(s.values[1:], s.values[:-1])[0, 1]
-            # Cov < 0：bid-ask bounce 可检测，Roll spread 有意义，赋正值
-            # Cov ≥ 0：Roll 公式产生虚数，无法估计 spread，置 NaN（不是 0）
-            # 理由：Fong(2017) 和 Goyenko(2009) 均指出，正样本自相关
-            #   对应真实 serial correlation 接近零的高流动性股票，
-            #   Roll 模型对这类股票没有判别力。
-            #   文献习惯赋 0（用于流动性水平比较），但在截面因子排序中，
-            #   大量 0 值聚集会导致 pd.qcut 分组崩溃（57% 数据同值）。
-            #   改为 NaN：明确区分"无法估计"与"流动性充分"，
-            #   在 Cov<0 的子集（约 43% 股票-月份）内部排序，经济含义清晰。
-            cov_row[col] = 2 * np.sqrt(-cov) if cov < 0 else np.nan
+        prev = group.ffill().shift(1)
+        pair = group.notna() & prev.notna()          # 有效配对掩码
+        a = group.where(pair)                        # r_t
+        b = prev.where(pair)                         # r_{t-1}
 
-        frames.append(pd.Series(cov_row))
+        n_pair = pair.sum()                          # = len(s) - 1
+        # 原判据 len(s) >= MIN_ROLLING_VALID_DAYS  ⇔  n_pair >= MIN - 1
+        enough = n_pair >= (MIN_ROLLING_VALID_DAYS - 1)
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cov = ((a - a.mean()) * (b - b.mean())).sum() / (n_pair - 1)
+
+        # Cov < 0：bid-ask bounce 可检测，Roll spread 有意义，赋正值
+        # Cov ≥ 0：Roll 公式产生虚数，无法估计 spread，置 NaN（不是 0）
+        # 理由：Fong(2017) 和 Goyenko(2009) 均指出，正样本自相关
+        #   对应真实 serial correlation 接近零的高流动性股票，
+        #   Roll 模型对这类股票没有判别力。
+        #   文献习惯赋 0（用于流动性水平比较），但在截面因子排序中，
+        #   大量 0 值聚集会导致 pd.qcut 分组崩溃（57% 数据同值）。
+        #   改为 NaN：明确区分"无法估计"与"流动性充分"，
+        #   在 Cov<0 的子集（约 43% 股票-月份）内部排序，经济含义清晰。
+        row = 2 * np.sqrt((-cov).where(cov < 0))
+        row[~enough] = np.nan
+
+        frames.append(row)
         dates.append(period_end)
 
     if not frames:
@@ -724,6 +743,95 @@ def _calc_capm_beta(data: dict) -> pd.DataFrame:
     )
 
 
+def _rolling_ff3_ols(ret_excess: pd.DataFrame,
+                     factors: pd.DataFrame,
+                     min_window_days: int = 200,
+                     min_stock_obs: int = 20) -> dict:
+    """12 个月滚动 FF3 回归，**一次算完所有股票**（向量化）。
+
+    对每个月末，取过去 12 个月的日度超额收益，逐股票拟合
+
+        r_i^e = α + β_mkt·MKT + β_smb·SMB + β_hml·HML + ε
+
+    一次返回 IVOL 与三个 Beta，供 `_calc_ivol` 和 `_calc_ff3_betas` 共用
+    （原本两个函数各跑一遍同样的回归）。
+
+    ── 为什么等价 ──────────────────────────────────────────────
+    与逐股 `LinearRegression().fit()` 解的是同一组正规方程 (X'X)β = X'y，
+    只是把「逐列求解」换成「批量求解」。缺失值按列各自处理：每只股票
+    只用自己非空的那些交易日，与原实现的 `y.dropna()` 行为一致。
+    用 `pinv`（SVD 最小二乘）而非 `solve`，与 sklearn 内部一致，
+    对奇异/病态矩阵能优雅退化。
+
+    ── 为什么要改 ──────────────────────────────────────────────
+    原实现是 248 个月末 × ~3500 只股票的双重循环，两个因子合计约 174 万次
+    sklearn 拟合，实测耗时约 30 分钟。此版约 10 秒。
+    """
+    idx  = ret_excess.index
+    cols = ret_excess.columns
+    n_stk = len(cols)
+
+    monthly_dates = pd.date_range(start=idx[0], end=idx[-1], freq='ME')
+
+    out = {k: [] for k in ('ivol', 'beta_mkt', 'beta_smb', 'beta_hml')}
+    dates = []
+
+    for month_end in monthly_dates:
+        window_start = month_end - pd.DateOffset(months=11)
+        wmask = (idx >= window_start) & (idx <= month_end)
+        if wmask.sum() < min_window_days:
+            continue
+
+        F = factors.values[wmask]                    # T×3
+        Y = ret_excess.values[wmask]                 # T×N
+
+        # 因子本身缺失的交易日整行剔除（原实现中这类行会让 sklearn 报错并跳过该股）
+        good = ~np.isnan(F).any(axis=1)
+        F, Y = F[good], Y[good]
+        T = len(F)
+        if T < min_stock_obs:
+            continue
+
+        X  = np.column_stack([np.ones(T), F])        # T×4，第 0 列为截距
+        M  = ~np.isnan(Y)                            # T×N 有效观测掩码
+        Mf = M.astype(np.float64)
+        Y0 = np.where(M, Y, 0.0)
+        n_obs = M.sum(axis=0)                        # 每只股票的有效样本数
+
+        # X'X 按各股票自己的缺失模式加权：X'diag(m_n)X
+        # 用 16 次「矩阵×向量」而非三算子 einsum，内存占用更小
+        XtX = np.empty((n_stk, 4, 4))
+        for i in range(4):
+            for j in range(i, 4):
+                v = Mf.T @ (X[:, i] * X[:, j])
+                XtX[:, i, j] = v
+                XtX[:, j, i] = v
+        Xty = (X.T @ Y0).T                           # N×4
+
+        beta = np.full((n_stk, 4), np.nan)
+        ok = n_obs >= min_stock_obs
+        if ok.any():
+            beta[ok] = np.einsum('nij,nj->ni',
+                                 np.linalg.pinv(XtX[ok]), Xty[ok])
+
+        resid = np.where(M, Y0 - X @ beta.T, 0.0)
+        sse   = (resid ** 2).sum(axis=0)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            ivol = np.sqrt(sse / (n_obs - 4)) * np.sqrt(252)
+        ivol = np.where(ok, ivol, np.nan)
+
+        s = lambda a: pd.Series(np.where(ok, a, np.nan), index=cols).dropna()
+        out['ivol'].append(s(ivol))
+        out['beta_mkt'].append(s(beta[:, 1]))
+        out['beta_smb'].append(s(beta[:, 2]))
+        out['beta_hml'].append(s(beta[:, 3]))
+        dates.append(month_end)
+
+    if not dates:
+        return {}
+    return {k: pd.DataFrame(v, index=dates) for k, v in out.items()}
+
+
 def _calc_ivol(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
     """
     特质波动率 IVOL（FF3回归残差年化标准差）。
@@ -770,65 +878,13 @@ def _calc_ivol(start: Optional[str] = None, end: Optional[str] = None) -> pd.Dat
     # ── 准备因子矩阵（MKT, SMB, HML）────────────────────────────
     factors = ff3[['MKT', 'SMB', 'HML']].copy()
 
-    # ── 月度滚动回归（12个月窗口） ──────────────────────────────
-    monthly_dates = pd.date_range(
-        start=ret_excess.index[0],
-        end=ret_excess.index[-1],
-        freq='ME'
-    )
+    # ── 月度滚动回归（12个月窗口，向量化，见 _rolling_ff3_ols）──────
 
-    ivol_series = []
-    ivol_dates = []
-
-    for month_end in monthly_dates:
-        # 12月滚动窗口：[month_end - 11 months, month_end]
-        window_start = month_end - pd.DateOffset(months=11)
-        window = ret_excess.index[(ret_excess.index >= window_start) & (ret_excess.index <= month_end)]
-
-        if len(window) < 200:  # 最少200个交易日
-            continue
-
-        ret_window = ret_excess.loc[window]
-        factors_window = factors.loc[window]
-
-        # 对每个股票做 FF3 回归
-        ivol_month = {}
-        for stock in ret_window.columns:
-            y = ret_window[stock].dropna()
-            X = factors_window.loc[y.index].copy()
-
-            # 添加常数项
-            X['const'] = 1.0
-            X = X[['const', 'MKT', 'SMB', 'HML']]
-
-            if len(y) < 20:  # 该窗口内该股票数据不足
-                continue
-
-            try:
-                # OLS 回归
-                model = LinearRegression()
-                model.fit(X.iloc[:, 1:], y)  # 不用 const，sklearn 自动添加
-
-                residuals = y - (model.intercept_ + model.predict(X.iloc[:, 1:]))
-
-                # IVOL = √(SSE/(n-k)) × √252，k=4（alpha + 3 betas）
-                n = len(residuals)
-                sse = (residuals ** 2).sum()
-                ivol = np.sqrt(sse / (n - 4)) * np.sqrt(252)
-
-                ivol_month[stock] = ivol
-            except Exception as e:
-                continue
-
-        if ivol_month:
-            ivol_series.append(pd.Series(ivol_month))
-            ivol_dates.append(month_end)
-
-    if not ivol_series:
+    res = _rolling_ff3_ols(ret_excess, factors)
+    if not res:
         return pd.DataFrame()
 
-    ivol_df = pd.DataFrame(ivol_series, index=ivol_dates)
-    return preprocess(ivol_df)
+    return preprocess(res['ivol'])
 
 
 def _calc_ff3_betas(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
@@ -881,67 +937,15 @@ def _calc_ff3_betas(start: Optional[str] = None, end: Optional[str] = None) -> p
     # ── 准备因子矩阵（MKT, SMB, HML）────────────────────────────
     factors = ff3[['MKT', 'SMB', 'HML']].copy()
 
-    # ── 月度滚动回归（12个月窗口） ──────────────────────────────
-    monthly_dates = pd.date_range(
-        start=ret_excess.index[0],
-        end=ret_excess.index[-1],
-        freq='ME'
-    )
+    # ── 月度滚动回归（12个月窗口，向量化，见 _rolling_ff3_ols）──────
 
-    beta_mkt_series = []
-    beta_smb_series = []
-    beta_hml_series = []
-    beta_dates = []
-
-    for month_end in monthly_dates:
-        # 12月滚动窗口
-        window_start = month_end - pd.DateOffset(months=11)
-        window = ret_excess.index[(ret_excess.index >= window_start) & (ret_excess.index <= month_end)]
-
-        if len(window) < 200:
-            continue
-
-        ret_window = ret_excess.loc[window]
-        factors_window = factors.loc[window]
-
-        # 对每个股票做 FF3 回归
-        betas_month_mkt = {}
-        betas_month_smb = {}
-        betas_month_hml = {}
-
-        for stock in ret_window.columns:
-            y = ret_window[stock].dropna()
-            X = factors_window.loc[y.index].copy()
-
-            if len(y) < 20:
-                continue
-
-            try:
-                # OLS 回归
-                model = LinearRegression()
-                model.fit(X, y)
-
-                # 提取三个因子的 Beta（回归系数）
-                # model.coef_ 顺序为 ['MKT', 'SMB', 'HML']
-                betas_month_mkt[stock] = model.coef_[0]
-                betas_month_smb[stock] = model.coef_[1]
-                betas_month_hml[stock] = model.coef_[2]
-            except Exception as e:
-                continue
-
-        if betas_month_mkt:
-            beta_mkt_series.append(pd.Series(betas_month_mkt))
-            beta_smb_series.append(pd.Series(betas_month_smb))
-            beta_hml_series.append(pd.Series(betas_month_hml))
-            beta_dates.append(month_end)
-
-    if not beta_mkt_series:
+    res = _rolling_ff3_ols(ret_excess, factors)
+    if not res:
         return pd.DataFrame()
 
-    # ── 转换为 DataFrame 并预处理 ──────────────────────────────
-    beta_mkt_df = pd.DataFrame(beta_mkt_series, index=beta_dates)
-    beta_smb_df = pd.DataFrame(beta_smb_series, index=beta_dates)
-    beta_hml_df = pd.DataFrame(beta_hml_series, index=beta_dates)
+    beta_mkt_df = res['beta_mkt']
+    beta_smb_df = res['beta_smb']
+    beta_hml_df = res['beta_hml']
 
     # 合并三个 beta 为单个 DataFrame（作为多列因子）
     # 主列为 beta_mkt（市场 Beta），其他两列为辅助

@@ -110,11 +110,17 @@ Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结
 | `pe1` | `pe1.csv` | 动态 PE | **Choice 无对应字段** |
 | `dividend_ratio` | `dividend_ratio.csv` | 股息率因子 | Choice 的 `LASTESTDIVIDEND` 更完整，可随时切 |
 
-**iFinD 供给（1 个）**
+**`listing_days` 已于 2026-08-11 切换到 Choice**
 
-| 字段 | 文件 | 用途 | ⚠️ 已知问题 |
-|---|---|---|---|
-| `listing_days` | `listed_days.csv` | 股票池过滤（次新股） | 列 5828（**比 Choice 少 48 只**）、止于 **2026-07-17**（落后 8 天）。`build_investable_mask` 取三者列交集 = 5803，且末端日期会被静默剔除 |
+由 `Database/data/listed_days_src/`（Choice `IPOLSTDAYS`，上市**自然日**）反推上市日期，
+再套交易日历换算成**上市交易日**，形状 5243 × 5855，与其余 19 个宽表完全对齐。
+
+原 iFinD 版存在两个缺陷，已一并解决：
+- 2026-05-25 ~ 07-01 共 **27 个交易日塌陷**，每天仅 2 只股票有值（正常 5828），
+  期间股票池会几乎全空且不报错
+- 退市股冻结最后值，能通过 `>= 60` 过滤；新版退市后为 NaN
+
+`build_investable_mask` 三输入现同形状：列交集 5803 → **5855**，末端 07-17 → **08-05**。
 
 **宏观与因子**
 
@@ -238,3 +244,50 @@ ic_series = calc_ic(factor, fwd_ret, method="spearman")
 
 **net_profit 字段**
 唯一仍依赖存档的字段。`net_profit_yoy` 因子回测区间受限于存档（2014~2021）。
+
+---
+
+## 性能与已修复的 bug（2026-08-11）
+
+全量回测 **27 分钟 → 3 分 48 秒**。四处「日期 × 股票」双重循环改为向量化，
+均经离线对拍验证数学等价（详见 `Database/docs/【主文档】…` §6.1e）：
+
+| 位置 | 原实现 | 改法 | 对拍 |
+|---|---|---|---|
+| `microstructure.py` `ivol`+`ff3_betas` | 248 月末 × ~3500 股票 × sklearn，约 174 万次拟合 | `_rolling_ff3_ols()` 一次批量 OLS，两因子共用 | 8.98e-16 |
+| `microstructure.py` `roll_spread` | 260 月 × 5855 列 × `np.cov` | `ffill().shift(1)` 复现 dropna 相邻配对 | 6.36e-15 |
+| `base.py` `neutralize_by_size` | 逐日期 sklearn | 闭式解 `β=cov/var` | 8.88e-16 |
+| `base.py` 另两个中性化 | HDF5 在双重循环内反复读盘 | 循环外预加载 + `lstsq` | 3.82e-14 |
+| `combine_factors.py` | `np.where(c, a/b, nan)` 触发除零警告 | `np.divide(where=)` | 输出逐格相同 |
+
+`base.py` 已移除 sklearn 依赖。
+
+### 修复：IVOL 的截距重复相加
+
+```python
+# 原代码
+residuals = y - (model.intercept_ + model.predict(X))
+#                 ↑ 截距            ↑ predict 已含截距
+```
+
+`model.predict(X) = intercept_ + X @ coef_`，再加一次 `intercept_` 即重复。
+后果是残差整体偏移 `-alpha`，`sse` 多出 `n·alpha²`，**IVOL 系统性偏大约 0.28%**。
+对因子结论影响极小（IC 均值 -0.0660 → -0.0659）。
+
+### 验收基准
+
+`turnover_20_neutral` 跨越不同时间区间（2014~2021 → 2007~2026）与不同数据源
+（Wind 存档 → Choice）仍逐项复现：
+
+| | 旧结论 | 新结果 |
+|---|---|---|
+| IC 均值 / ICIR | -0.097 / -0.72 | -0.0980 / -0.6943 |
+| G1 年化 / Sharpe | +22.5% / 0.76 | +23.32% / 0.7756 |
+| G5 年化 / Sharpe | -2.1% / -0.06 | -2.53% / -0.0707 |
+
+> 注：该基准对应的是**中性化版本**，不是 `turnover_20`（无中性化版新结果为 IC -0.0699）。
+
+### 缓存对拍
+
+`scripts/compare_cache.py` 比对 `output/cache/` 与 `output/cache_before_opt/`，
+逐格核对因子矩阵，是「只变快、没变结果」这一声称的证据。

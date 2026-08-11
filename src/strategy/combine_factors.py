@@ -268,6 +268,15 @@ def combine_factors(
         denominator = np.sum(w_broadcast, axis=2)
 
     # 归一化（denominator=0 → NaN）
-    composite = np.where(denominator > 0, numerator / denominator, np.nan)
+    #
+    # 不能用 np.where(cond, a/b, nan)：np.where 会**先把两个分支都算完**再选，
+    # 所以 b==0 处照样执行除法，触发 RuntimeWarning（结果本身是对的，
+    # 因为随后选了 nan）。改用 np.divide 的 where= 参数，从源头跳过这些位置。
+    # denominator==0 的含义是该 (日期,股票) 上所有因子都缺失，本就该是 NaN。
+    composite = np.divide(
+        numerator, denominator,
+        out=np.full_like(numerator, np.nan, dtype=float),
+        where=denominator > 0,
+    )
 
     return pd.DataFrame(composite, index=common_idx, columns=common_cols)
