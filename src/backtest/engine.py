@@ -102,7 +102,7 @@ def group_return(
         各分组月度收益率，index=日期，columns=["G1","G2",...,"Gn","LS"]
         "LS" 列为多空组合（Gn - G1）
     """
-    from strategy.optimizer import group_by_score
+    from src.strategy.optimizer import group_by_score
 
     # 对齐时间和股票
     common_idx  = factor.index.intersection(monthly_ret.index)

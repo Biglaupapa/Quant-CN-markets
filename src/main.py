@@ -45,6 +45,11 @@ CACHE_DIR = FACTOR_OUTPUT_DIR / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _as_list(x):
+    """把 int 或 list 统一成 list。n_groups 兼容两种写法。"""
+    return list(x) if isinstance(x, (list, tuple)) else [x]
+
+
 # =============================================================================
 # 市场回测开关（独立控制，互不影响）
 # =============================================================================
@@ -119,8 +124,13 @@ FACTOR_DIRECTIONS = {
     "pb":                        -1,   # PB 越低 = 价值股，预期收益正向（低PB好）
     "bm":                        +1,   # B/M 越高 = 价值股，正向因子
     "pe_ttm":                    -1,   # PE 越低 = 价值股（低PE好）
-    "pe1":                       -1,   # 同 pe_ttm
+    "pe1":                       -1,   # ⚠️ 现为 Choice PE（静态口径），非原动态 PE
     "dividend_yield":            +1,   # 股息率越高越好
+    "ps_ttm":                    -1,   # PS 越低 = 越便宜
+    "ev_ebitda":                 -1,   # 企业倍数越低 = 越便宜
+    "est_pe_ftm":                -1,   # 预测 PE 越低 = 越便宜
+    "est_peg":                   +1,   # ⚠️ 实测方向与直觉相反：高 PEG 反而跑赢，见 CLAUDE.md
+    "ev2_neutral":               -1,   # 同等规模下企业价值越低 = 越便宜（先按逻辑设，跑完回填）
     "size":                      -1,   # 小市值溢价（小市值好）
     "size2":                     -1,   # 同 size
     "net_profit_yoy":            +1,   # 净利润增速越高越好
@@ -197,28 +207,75 @@ FACTOR_FLAGS = {
     "pb":                        True,   # 市净率（无中性化）
     "bm":                        True,   # 账面市值比 log(1/PB)（无中性化，正向因子）
     "pe_ttm":                    True,   # 市盈率 TTM（无中性化）
-    "pe1":                       True,   # 动态市盈率（无中性化）
+    "pe1":                       True,   # 市盈率（⚠️ 现为 Choice PE 静态口径）
     "dividend_yield":            True,   # 股息率 TTM（无中性化）
+    "ps_ttm":                    True,   # 市销率 TTM（无中性化）
+    "ev_ebitda":                 True,   # 企业倍数 EV2/EBITDA（无中性化）
+    "est_pe_ftm":                True,   # 预测 PE 未来12月（无中性化）⚠️ 覆盖约 51%
+    "est_peg":                   True,   # 预测 PEG（无中性化）⚠️ 覆盖约 51%
+    "ev2_neutral":               True,   # log(EV2)，流通市值中性化
     "size":                      True,   # log(总市值)（无中性化）
     "size2":                     True,   # log(流通市值)（无中性化）
     "net_profit_yoy":            False,   # 净利润同比增速（流通市值+行业双重中性化）
 
-    # ── 待激活因子（需补充数据后将 False 改为 True）─────────────────────────
-    # [需补充数据] marketrtn_daily.csv（日度市场收益率序列）
-    "ps_gamma":                  False,   # Pastor-Stambaugh Gamma
-
-    # [需补充数据] ps_gamma 先激活 + marketrtn_daily.csv
-    "ps_liq_beta":               False,   # PS 流动性 Beta（36月滚动）
-
-    # [需补充数据] marketvalue.csv（日度流通市值序列）+ amt.csv（已有）
-    "ap_betas":                  False,   # Acharya-Pedersen β1-β5
-
-    # [需补充数据] marketrtn_daily.csv
-    "capm_beta":                 False,   # CAPM 市场 Beta（240日滚动）
-
+    # ── 风险/流动性风险因子 ────────────────────────────────────────────────
     # [已补充] FF3 日度因子 + rf_daily.csv（2026-07-15 就绪）
     "ivol":                      True,    # 特质波动率（FF3 残差年化标准差）
-    "ff3_betas":                 True,    # FF3 三因子 Beta
+    "ff3_betas":                 True,    # FF3 市场 Beta（= β_mkt，口径未变）
+
+    # ★ 2026-08-18 激活。原标注「需补 marketrtn_daily.csv」已失效：
+    #   ff3_daily.csv 的 MKT 是超额市场收益，r_m = MKT + Rf 即所需序列；
+    #   ap_betas 需要的日度流通市值就是 neg_market_value.csv。均已就绪。
+    "beta_smb":                  True,    # FF3 规模载荷（原塞在 attrs 里被丢弃）
+    "beta_hml":                  True,    # FF3 价值载荷（同上）
+    "capm_beta":                 True,    # CAPM 市场 Beta（240日滚动）
+    "ps_gamma":                  True,    # Pastor-Stambaugh Gamma
+    "ps_liq_beta":               True,    # PS 流动性 Beta（36月滚动）
+    "ap_beta1":                  True,    # Acharya-Pedersen β1（市场收益）
+    "ap_beta2":                  True,    # AP β2（流动性共动）
+    "ap_beta3":                  True,    # AP β3（收益 vs 市场流动性）
+    "ap_beta4":                  True,    # AP β4（流动性 vs 市场收益）
+    "ap_beta5":                  True,    # AP β5 = β2 − β3 − β4（净流动性）
+
+    # ── ★ 2026-08-18 特征扩充（src/factors/expansion.py，22 个）───────────
+    # 为 ML 面板准备特征宽度。入选标准：GKX/JKP 有清晰构建方法 + Choice
+    # 现有字段可构建 + **不做估值反推**（财报数据优先，没有就不做）。
+    # 动量 / 反转族
+    "ret_2_1":                   True,
+    "ret_3_1":                   True,
+    "ret_6_1":                   True,
+    "ret_6_0":                   True,
+    "ret_9_1":                   True,
+    "ret_12_7":                  True,
+    "ret_36_13":                 True,   # 长期反转
+    "seasonality":               True,   # 季节性动量（6~10年同月）
+    "prc_high_252":              True,   # 52周高点接近度
+    # 波动 / 极值族
+    "rvol_21":                   True,
+    "rvol_252":                  True,
+    "rmax1_21":                  True,   # MAX effect
+    "rmax5_21":                  True,
+    "skew_21":                   True,
+    # 流动性 / 微观结构族
+    # ✅ 2026-08-20 重构并重新启用：改为 Liu (2006) 的 LM 指标
+    #    （252日窗口 + 换手率打破平局）。初版「21日零成交占比」的分组塌陷
+    #    不是数据性质而是构建缺陷——漏了 Liu 原文里专门用来打破平局的
+    #    换手率项，导致截面 96%~99.7% 取同一个值。修正后各截面取值几乎全不同
+    #    （5192 只股票 5191 个不同取值）。详见 expansion.py 该函数注释。
+    "zero_trades_252":           True,
+    "dolvol_126":                True,
+    "turn_std_21":               True,
+    "close_vwap_dev":            True,   # ★ VWAP 独有
+    "amihud_vwap":               True,   # ★ VWAP 独有
+    "high_low_range":            True,
+    # 规模 / 股本族
+    "free_float_ratio":          True,   # ★ A股特色
+    "float_shares_chg":          True,   # 解禁压力
+    "age":                       True,
+    # 估值比率的时序变换（仅变换，无反推）
+    "ep":                        True,
+    "sp":                        True,
+    "pb_chg_12":                 True,
 }
 
 # =============================================================================
@@ -253,7 +310,14 @@ BACKTEST_END = str(
 BACKTEST_CONFIG = {
     "start":        BACKTEST_START,
     "end":          BACKTEST_END,
-    "n_groups":     5,             # 分组数（5 或 10）
+    "n_groups":     5,             # 分组数。可以是 int，也可以是 list
+                                   #   5        → 只跑五分组（默认，与全部历史记录一致）
+                                   #   [5, 10]  → 五分组 + 十分组各出一份报告
+                                   # ⚠️ **列表的第一个是主口径**：它的输出文件不带后缀、
+                                   #    并用于多因子合成；其余只额外产出 `_gN` 后缀的报告。
+                                   #    默认保持 5 不动——CLAUDE.md / FACTORS.md 里
+                                   #    62 个因子的全部结果与验收基准都是五分组的。
+                                   #    十分组是 GKX/JKP 的学术惯例，与 src/ml 对比时用。
     "freq":         12,            # 数据频率（月度=12，季度=4）
     "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
     "force_recalc": True,          # True = 忽略缓存、强制重新计算所有因子
@@ -269,19 +333,24 @@ BACKTEST_CONFIG = {
 
 def _get_factor_func(factor_name: str):
     """根据因子名称返回对应的计算函数。"""
-    from factors.microstructure import (
+    from src.factors.microstructure import (
         calc_reversal_20, calc_momentum_12_1,
         calc_turnover_20, calc_turnover_20_neutral,
         calc_amihud, calc_amihud_neutral,
         calc_amihud_zero_adj, calc_amihud_zero_adj_neutral,
         calc_cs_spread, calc_roll_spread,
         calc_overnight_ret, calc_volatility_30,
-        _calc_ps_gamma, _calc_ps_liq_beta, _calc_ap_betas,
+        _calc_ps_gamma, _calc_ps_liq_beta,
+        _calc_ap_beta1, _calc_ap_beta2, _calc_ap_beta3,
+        _calc_ap_beta4, _calc_ap_beta5,
         _calc_capm_beta, _calc_ivol, _calc_ff3_betas,
+        _calc_beta_smb, _calc_beta_hml,
     )
-    from factors.fundamental import (
+    from src.factors.fundamental import (
         calc_pb, calc_bm, calc_pe_ttm, calc_pe1,
         calc_dividend_yield, calc_size, calc_size2, calc_net_profit_yoy,
+        calc_ps_ttm, calc_ev_ebitda, calc_est_pe_ftm, calc_est_peg,
+        calc_ev2_neutral,
     )
 
     mapping = {
@@ -299,13 +368,19 @@ def _get_factor_func(factor_name: str):
         "turnover_20_neutral":       calc_turnover_20_neutral,
         "amihud_neutral":            calc_amihud_neutral,
         "amihud_zero_adj_neutral":   calc_amihud_zero_adj_neutral,
-        # 待激活
+        # 风险 / 流动性风险
         "ps_gamma":                  _calc_ps_gamma,
         "ps_liq_beta":               _calc_ps_liq_beta,
-        "ap_betas":                  _calc_ap_betas,
+        "ap_beta1":                  _calc_ap_beta1,
+        "ap_beta2":                  _calc_ap_beta2,
+        "ap_beta3":                  _calc_ap_beta3,
+        "ap_beta4":                  _calc_ap_beta4,
+        "ap_beta5":                  _calc_ap_beta5,
         "capm_beta":                 _calc_capm_beta,
         "ivol":                      _calc_ivol,
         "ff3_betas":                 _calc_ff3_betas,
+        "beta_smb":                  _calc_beta_smb,
+        "beta_hml":                  _calc_beta_hml,
         # 基本面
         "pb":                        calc_pb,
         "bm":                        calc_bm,
@@ -315,7 +390,26 @@ def _get_factor_func(factor_name: str):
         "size":                      calc_size,
         "size2":                     calc_size2,
         "net_profit_yoy":            calc_net_profit_yoy,
+        "ps_ttm":                    calc_ps_ttm,
+        "ev_ebitda":                 calc_ev_ebitda,
+        "est_pe_ftm":                calc_est_pe_ftm,
+        "est_peg":                   calc_est_peg,
+        "ev2_neutral":               calc_ev2_neutral,
     }
+
+    # ── 特征扩充（expansion.py）：函数名统一为 calc_<因子名> ──────────────
+    from src.factors import expansion
+    for _name in (
+        "ret_2_1", "ret_3_1", "ret_6_1", "ret_6_0", "ret_9_1", "ret_12_7",
+        "ret_36_13", "seasonality", "prc_high_252",
+        "rvol_21", "rvol_252", "rmax1_21", "rmax5_21", "skew_21",
+        "zero_trades_252", "dolvol_126", "turn_std_21",
+        "close_vwap_dev", "amihud_vwap", "high_low_range",
+        "free_float_ratio", "float_shares_chg", "age",
+        "ep", "sp", "pb_chg_12",
+    ):
+        mapping[_name] = getattr(expansion, f"calc_{_name}")
+
     return mapping.get(factor_name)
 
 
@@ -370,7 +464,7 @@ def _run_single_market(
     cache_prefix: str,
     start: str,
     end,
-    n_groups: int,
+    n_groups,          # int 或 list[int]
     freq: int,
     save_out: bool,
     force_recalc: bool,
@@ -384,7 +478,10 @@ def _run_single_market(
     print("=" * 60)
     print(f"  量化因子回测框架  [{market_label}]")
     print(f"  回测区间：{start} ~ {end or '至今'}")
-    print(f"  分组数：{n_groups}，频率：{'月度' if freq == 12 else '季度'}")
+    _gs = _as_list(n_groups)
+    print(f"  分组数：{_gs[0]}（主口径）"
+          + (f" + {_gs[1:]}（附加报告）" if len(_gs) > 1 else "")
+          + f"，频率：{'月度' if freq == 12 else '季度'}")
     print(f"  因子缓存：{'强制重算' if force_recalc else '启用（命中则跳过计算）'}")
     print("=" * 60)
 
@@ -442,23 +539,32 @@ def _run_single_market(
         # fwd_ret：下期收益（T月末因子 → 预测 T+1月收益，避免前瞻偏差）
         try:
             fwd_ret   = monthly_ret.shift(-1)
-            grp_ret   = group_return(factor, fwd_ret, n_groups=n_groups)
             ic_series = calc_ic(factor, fwd_ret, method="spearman")
 
-            results[factor_name] = {
-                "factor":    factor,
-                "group_ret": grp_ret,
-                "ic_series": ic_series,
-            }
+            # n_groups 可以是 int 或 list。**首个分组数是主口径**：
+            # 它的结果进 results（供多因子合成用）、输出文件不带后缀，
+            # 与历史文件名和文档里的记录完全一致。
+            # 其余分组数只额外产出一份带 `_gN` 后缀的报告，互不干扰。
+            for gi, ng in enumerate(_as_list(n_groups)):
+                grp_ret = group_return(factor, fwd_ret, n_groups=ng)
+                suffix  = "" if gi == 0 else f"_g{ng}"
 
-            print_factor_report(factor_name, grp_ret, ic_series, freq=freq)
+                if gi == 0:
+                    results[factor_name] = {
+                        "factor":    factor,
+                        "group_ret": grp_ret,
+                        "ic_series": ic_series,
+                    }
 
-            if save_out:
-                out_name = f"{factor_name}"
-                save_report(out_name, grp_ret, ic_series, stats_dir, freq=freq)
-                factor_direction = directions.get(factor_name, 1)
-                plot_nav_curve(out_name, grp_ret, img_dir, freq=freq,
-                               direction=factor_direction)
+                print_factor_report(f"{factor_name}{suffix}", grp_ret,
+                                    ic_series, freq=freq)
+
+                if save_out:
+                    out_name = f"{factor_name}{suffix}"
+                    save_report(out_name, grp_ret, ic_series, stats_dir, freq=freq)
+                    factor_direction = directions.get(factor_name, 1)
+                    plot_nav_curve(out_name, grp_ret, img_dir, freq=freq,
+                                   direction=factor_direction)
 
         except Exception as e:
             warnings.warn(f"  ✗ {factor_name} 回测异常：{e}")
@@ -537,7 +643,7 @@ def _run_single_market(
         print("\n" + "─" * 40)
         print("  多因子合成：等权（Equal Weight）")
         composite_eq = combine_factors(aligned, weights="equal")
-        grp_ret_eq   = group_return(composite_eq, fwd_ret, n_groups=n_groups)
+        grp_ret_eq   = group_return(composite_eq, fwd_ret, n_groups=_as_list(n_groups)[0])
         ic_eq        = calc_ic(composite_eq, fwd_ret, method="spearman")
 
         eq_name = "multi_factor_equal"
@@ -562,7 +668,7 @@ def _run_single_market(
             print(f"    {fname}: {w:.4f}")
 
         composite_ir = combine_factors(aligned, weights=icir_weights)
-        grp_ret_ir   = group_return(composite_ir, fwd_ret, n_groups=n_groups)
+        grp_ret_ir   = group_return(composite_ir, fwd_ret, n_groups=_as_list(n_groups)[0])
         ic_ir        = calc_ic(composite_ir, fwd_ret, method="spearman")
 
         ir_name = "multi_factor_icir"

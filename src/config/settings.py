@@ -93,11 +93,25 @@ DATABASE_FIELD_MAP = {
     "volume":          "volume.csv",
     "amt":             "amt.csv",
     "turn":            "turn.csv",
+    # 成交均价 VWAP（= AMOUNT/VOLUME，Choice 全精度；2026-08-18 接入）
+    # ★ 这是相对 CRSP / JKP 的独有字段——美国学术库不提供日内 VWAP，
+    #   故 close/vwap 偏离、VWAP 口径 Amihud 这类特征在英文文献里罕见。
+    "vwap":            "vwap.csv",             # 不复权
+    "vwap_adj":        "vwap_adj.csv",         # 后复权
     # 基本面估值（快照）
-    "pe_ttm":           "pe_ttm.csv",           # 市盈率 TTM（静态，基于最新年报）
-    "pe1":              "pe1.csv",              # 动态市盈率（滚动12个月盈利预测）
-    "pb":               "pb.csv",               # 市净率
-    "dividend_ratio":   "dividend_ratio.csv",   # 股息率（近12个月，%）
+    "pe_ttm":           "pe_ttm.csv",           # 市盈率 TTM（Choice PETTM）
+    # ⚠️ 键名 pe1 是历史遗留，文件其实是 Choice 的 PE（最近年报静态市盈率）。
+    #    原 Datayes pe1 = 市值/(最新单季净利×4)，是单季年化动态 PE；Choice 26 个字段
+    #    里没有净利润，重建不出该口径（与 PE 秩相关仅 0.20~0.43），故于 2026-08-17
+    #    改用 PE 顶替并沿用旧因子名。这是语义替换，该因子历史值已整体改变。
+    "pe1":              "pe.csv",               # Choice PE（静态市盈率）
+    "pb":               "pb.csv",               # 市净率（Choice PB）
+    "dividend_ratio":   "dividend_ratio.csv",   # 股息率（Choice LASTESTDIVIDEND，%）
+    "ps_ttm":           "ps_ttm.csv",           # 市销率 TTM（Choice PSTTM）
+    "ev2":              "ev2.csv",              # 企业价值(剔除货币资金)，单位：元
+    "ev_ebitda":        "ev_ebitda.csv",        # 企业倍数 EV2/EBITDA
+    "est_pe_ftm":       "est_pe_ftm.csv",       # 预测市盈率（未来12月），覆盖约 51%
+    "est_peg":          "est_peg.csv",          # 预测 PEG，覆盖约 51%
     # 市值
     "market_value":     "market_value.csv",     # 总市值（元）→ Size 因子
     "neg_market_value": "neg_market_value.csv", # 流通市值（元）→ Size2 因子
@@ -115,11 +129,10 @@ DATABASE_FIELD_MAP = {
 HIST_START = "2014-01-01"   # 历史 CSV 数据起始（用于存档 adjusted 价格）
 HIST_END   = "2021-03-31"   # 历史 CSV 数据截止（存档实际到 2021-03-31）
 DB_START   = "2005-01-04"   # Database 数据起始
-# ⚠️ 2026-08 数据源变更：A 股 19 个字段已由 iFinD/Datayes 切换到 Choice。
-#    起点由 2003-01-02 改为 2005-01-04，股票列由 6077 改为 5855（时点并集）。
-#    当前形状 5243 × 5855，覆盖 2005-01-04 ~ 2026-08-06。
-#    例外：listed_days 仍来自 iFinD（5828 列，止于 2026-07-17），
-#    build_investable_mask 取三者列交集，实际股票池会被它限制。
+# ⚠️ 2026-08 数据源变更：A 股已 100% 迁至 Choice，Datayes 于 2026-08-17 完全退场。
+#    起点由 2003-01-02 改为 2005-01-04，股票列由 6077 改为 5861（时点并集）。
+#    当前形状 5250 × 5861，覆盖 2005-01-04 ~ 2026-08-14，全部 29 个字段口径一致。
+#    以 .sources.json 为准，不要以本注释为准——核实方法是直接读各 CSV 末行日期。
 #    详见 Database/docs/【主文档】框架全景记录与Choice迁移方案.md
 
 # -----------------------------------------------------------------------------

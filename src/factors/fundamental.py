@@ -6,22 +6,32 @@
 #
 #   pb               市净率（月末截面，无中性化）
 #   bm               账面市值比 log(1/PB)（月末截面，无中性化，正向因子）
-#   pe_ttm           市盈率 TTM（静态，月末截面，无中性化）
-#   pe1              动态市盈率（滚动12个月，月末截面，无中性化）
-#   dividend_yield   股息率（近12个月，月末截面，无中性化）
+#   pe_ttm           市盈率 TTM（月末截面，无中性化）
+#   pe1              市盈率（月末截面，无中性化）
+#                    ⚠️ 名字是历史遗留，2026-08-17 起实为 Choice PE（静态口径），
+#                       不再是原 Datayes 的单季年化动态 PE。详见 calc_pe1 docstring
+#   dividend_yield   股息率（月末截面，无中性化）
 #   size             市值因子 log(总市值)（月末截面，无中性化）
-#                    → 数据源：market_value（Datayes，2004+）
+#                    → 数据源：market_value
 #   size2            流通市值因子 log(流通市值)（月末截面，无中性化）
-#                    → 数据源：neg_market_value（Datayes，2004+）
+#                    → 数据源：neg_market_value
 #   net_profit_yoy   净利润同比增速（季度，滞后3个季度，流通市值+行业双重中性化）
+#
+#   ── 2026-08-17 新增（均来自 Choice）────────────────────────────────────────
+#   ps_ttm           市销率 TTM（月末截面，无中性化）覆盖 100%
+#   ev_ebitda        企业倍数 EV2/EBITDA（月末截面，无中性化）覆盖 98%
+#   est_pe_ftm       预测市盈率（未来12月，月末截面，无中性化）⚠️ 覆盖仅约 51%
+#   est_peg          预测 PEG（月末截面，无中性化）⚠️ 覆盖仅约 51%
+#   ev2_neutral      log(企业价值剔除货币资金)（月末截面，**流通市值中性化**）
 #
 # 中性化说明：
 #   net_profit_yoy 做流通市值+行业双重中性化
+#   ev2_neutral    做流通市值中性化（EV2 是水平量，不中性化即为市值代理）
 #   其余因子均不做中性化
 #
 # 数据来源标注：
-#   [arch]   来自 _archive/raw_data/ 历史 CSV（2014-2020）
-#   [db]     来自 Database/data/stock/A/（2004-至今）
+#   [arch]   来自 _archive/raw_data/ 历史 CSV（2014-2020），现仅 net_profit 依赖
+#   [db]     来自 Database/data/stock/A/（2005-至今，已 100% Choice）
 #   [orig]   移植自原 因子框架.py
 # =============================================================================
 
@@ -176,15 +186,17 @@ def calc_pe1(
     end: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    动态市盈率因子（PE1）：月末截面值，越小代表估值越低。
+    市盈率因子：月末截面值，越小代表估值越低。负值（亏损公司）置为 NaN。无中性化。
 
-    PE1 与 pe_ttm 的区别：
-      pe_ttm = 总市值 / 最近一年报告期净利润（静态，基于已披露年报）
-      pe1    = 总市值 / 滚动12个月盈利（动态，含最新季报，更及时）
+    ⚠️ 口径已于 2026-08-17 变更，因子名是历史遗留：
+      旧（Datayes pe1）= 市值 / (最新单季净利 × 4)，单季年化动态 PE
+      新（Choice PE） = 市值 / 最近年报净利，静态 PE
 
-    负值（亏损公司）置为 NaN。无中性化。
+    换源原因：Datayes 停更于 2026-07-17，而 Choice 的 26 个字段里没有净利润，
+    无法重建单季年化口径（与 PE 秩相关仅 0.20~0.43）。因此这不是无损换源，
+    该因子的历史值已整体改变，不能与 2026-08-17 之前的回测数字直接比较。
 
-    数据：pe1 [db: pe1.csv]（Datayes，2004+）
+    数据：pe1 [db: pe.csv]（Choice PE，2005+）
     """
     data = load_data(["pe1"], start=start, end=end)
     pe1 = data.get("pe1")
@@ -343,4 +355,180 @@ def calc_net_profit_yoy(
         neutralize="size+industry",
         log_mktcap=log_mktcap,
         industry_h5_path=INDUSTRY_H5_PATH,
+    )
+
+
+# -----------------------------------------------------------------------------
+# 9. 市销率因子（PS TTM）
+#    来源：[db] ps_ttm.csv（Choice PSTTM）
+# -----------------------------------------------------------------------------
+
+def calc_ps_ttm(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    市销率 TTM 因子：月末截面值，越小代表估值越低。
+
+    相比 PE，PS 的分母是营收而非利润，亏损公司同样有值——2026-08-14 截面
+    非空 100%、负值 0.0%，是这批估值字段里最干净的一个。
+
+    负值置为 NaN（理论上不存在，防御性处理）。无中性化。
+
+    数据：ps_ttm [db: ps_ttm.csv]（Choice PSTTM，2005+）
+    """
+    data = load_data(["ps_ttm"], start=start, end=end)
+    ps = data.get("ps_ttm")
+
+    if ps is None:
+        warnings.warn("[fundamental] calc_ps_ttm: 缺少 ps_ttm 数据")
+        return pd.DataFrame()
+
+    mask = build_investable_mask(start=start, end=end, freq="D")
+    ps_m = to_monthly(apply_universe(ps, mask), method="last")
+    ps_m[ps_m <= 0] = np.nan
+
+    return preprocess(ps_m)
+
+
+# -----------------------------------------------------------------------------
+# 10. 企业倍数因子（EV2 / EBITDA）
+#     来源：[db] ev_ebitda.csv（Choice EVTOEBITDA）
+# -----------------------------------------------------------------------------
+
+def calc_ev_ebitda(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    企业倍数因子 EV/EBITDA：月末截面值，越小代表估值越低。
+
+    相比 PE，EV/EBITDA 剔除了资本结构与折旧摊销的影响，跨行业可比性更好。
+    2026-08-14 截面非空 98.1%，其中 16.9% 为负（EBITDA 为负的亏损公司），
+    与 PE 一样置为 NaN。无中性化。
+
+    数据：ev_ebitda [db: ev_ebitda.csv]（Choice EVTOEBITDA，2005+）
+    """
+    data = load_data(["ev_ebitda"], start=start, end=end)
+    ev = data.get("ev_ebitda")
+
+    if ev is None:
+        warnings.warn("[fundamental] calc_ev_ebitda: 缺少 ev_ebitda 数据")
+        return pd.DataFrame()
+
+    mask = build_investable_mask(start=start, end=end, freq="D")
+    ev_m = to_monthly(apply_universe(ev, mask), method="last")
+    ev_m[ev_m <= 0] = np.nan
+
+    return preprocess(ev_m)
+
+
+# -----------------------------------------------------------------------------
+# 11. 预测市盈率因子（PE, 未来12月）
+#     来源：[db] est_pe_ftm.csv（Choice ESTPEFTM）
+# -----------------------------------------------------------------------------
+
+def calc_est_pe_ftm(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    预测市盈率因子（未来12个月）：月末截面值，越小代表估值越低。
+
+    与 pe_ttm 的区别在于分母是分析师一致预期盈利而非已实现盈利，含前瞻信息。
+
+    ⚠️ 覆盖率仅约 51%——只有被分析师跟踪的标的才有值，天然偏向大盘股。
+    该因子实际只对半个市场发声，且这半个市场不是随机抽样，解读时须注意选择偏差。
+
+    负值置为 NaN。无中性化。
+
+    数据：est_pe_ftm [db: est_pe_ftm.csv]（Choice ESTPEFTM，2005+）
+    """
+    data = load_data(["est_pe_ftm"], start=start, end=end)
+    pe = data.get("est_pe_ftm")
+
+    if pe is None:
+        warnings.warn("[fundamental] calc_est_pe_ftm: 缺少 est_pe_ftm 数据")
+        return pd.DataFrame()
+
+    mask = build_investable_mask(start=start, end=end, freq="D")
+    pe_m = to_monthly(apply_universe(pe, mask), method="last")
+    pe_m[pe_m <= 0] = np.nan
+
+    return preprocess(pe_m)
+
+
+# -----------------------------------------------------------------------------
+# 12. 预测 PEG 因子
+#     来源：[db] est_peg.csv（Choice ESTPEG）
+# -----------------------------------------------------------------------------
+
+def calc_est_peg(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    预测 PEG 因子：预测 PE / 预测盈利增速，越小代表「成长性相对估值」越便宜。
+
+    ⚠️ 两重注意：
+      1. 覆盖率与 est_pe_ftm 相同（约 51%），同样偏向大盘股
+      2. PEG 是「比率的比率」，分母增速接近 0 时数值会爆炸，噪声天然大于 PE
+
+    负值置为 NaN（增速为负时 PEG 无经济含义）。无中性化。
+
+    数据：est_peg [db: est_peg.csv]（Choice ESTPEG，2005+）
+    """
+    data = load_data(["est_peg"], start=start, end=end)
+    peg = data.get("est_peg")
+
+    if peg is None:
+        warnings.warn("[fundamental] calc_est_peg: 缺少 est_peg 数据")
+        return pd.DataFrame()
+
+    mask  = build_investable_mask(start=start, end=end, freq="D")
+    peg_m = to_monthly(apply_universe(peg, mask), method="last")
+    peg_m[peg_m <= 0] = np.nan
+
+    return preprocess(peg_m)
+
+
+# -----------------------------------------------------------------------------
+# 13. 企业价值因子（log EV2，市值中性化）
+#     来源：[db] ev2.csv（Choice EV2）
+# -----------------------------------------------------------------------------
+
+def calc_ev2_neutral(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    企业价值（剔除货币资金）因子：log(EV2) 后做流通市值中性化。
+
+    ⚠️ 为什么必须中性化：EV2 是以「元」为单位的水平量（2026-08-14 截面中位数
+    约 62 亿），不是比率。原样使用本质上就是一个市值代理，会与 size 因子高度共线，
+    跑出来的信号只是规模溢价的复制品。取对数后对 log(流通市值) 回归取残差，
+    剥离规模成分，剩下的才是「同等规模下企业价值偏高/偏低」这一独立信息。
+
+    非正值置为 NaN（取对数要求），中性化方式：size。
+
+    数据：ev2 [db: ev2.csv]（Choice EV2，2005+）+ neg_market_value
+    """
+    data = load_data(["ev2"], start=start, end=end)
+    ev2 = data.get("ev2")
+
+    if ev2 is None:
+        warnings.warn("[fundamental] calc_ev2_neutral: 缺少 ev2 数据")
+        return pd.DataFrame()
+
+    mask   = build_investable_mask(start=start, end=end, freq="D")
+    ev2_m  = to_monthly(apply_universe(ev2, mask), method="last")
+    ev2_m[ev2_m <= 0] = np.nan
+    log_ev2 = np.log(ev2_m)
+
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+
+    return preprocess(
+        log_ev2,
+        neutralize="size",
+        log_mktcap=log_mktcap,
     )

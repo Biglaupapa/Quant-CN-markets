@@ -56,6 +56,7 @@ FACTOR_DIRECTIONS = {
     "cs_spread": -1, "roll_spread": -1, "overnight_ret": +1, "volatility_30": -1,
     "pb": -1, "bm": +1, "pe_ttm": -1, "pe1": -1, "dividend_yield": +1,
     "size": -1, "size2": -1, "net_profit_yoy": +1,
+    "ps_ttm": -1, "ev_ebitda": -1, "est_pe_ftm": -1, "est_peg": +1, "ev2_neutral": -1,
 }
 
 

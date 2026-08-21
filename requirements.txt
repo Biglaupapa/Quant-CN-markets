@@ -2,7 +2,7 @@
 # Quant — 依赖说明
 # -----------------------------------------------------------------------------
 # 本项目共用上层目录的 venv 环境（Python 3.13），无需单独建环境：
-#   source /Users/louis/MyProjects/venv/bin/activate
+#   conda activate /Users/louis/MyProjects/venv
 #
 # 本文件仅用于「说明」项目实际依赖的第三方库，版本号取自当前 venv。
 # 如需在新环境复现，可执行：pip install -r requirements.txt

@@ -242,7 +242,7 @@ def get_clean_field(
     pd.DataFrame
         过滤后的干净数据，不可投资位置为 NaN
     """
-    from data.loader import load_field, to_monthly
+    from src.data.loader import load_field, to_monthly
 
     raw  = load_field(field, start=start, end=end)
     mask = build_investable_mask(start=start, end=end, freq="D")

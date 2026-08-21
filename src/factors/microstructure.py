@@ -18,13 +18,19 @@
 #   overnight_ret            隔夜收益率（月均）
 #   volatility_30            短期波动率（30日，月末取值）
 #
-# ── 待激活因子（需额外数据，暂注释掉调用）────────────────────────────────
-#   ps_gamma         Pastor-Stambaugh Gamma（需市场收益率日序列）
-#   ps_liq_beta      PS 流动性 Beta（需先算 Gamma，36月滚动）
-#   ap_betas         Acharya-Pedersen β1-β5（需市值、成交额）
-#   capm_beta        CAPM 市场 Beta（240日滚动，需市场收益率）
-#   ivol             特质波动率（FF3残差年化标准差，需FF3因子+无风险利率）
-#   ff3_betas        Fama-French 三因子 Beta（需FF3因子+无风险利率）
+# ── 风险 / 流动性风险因子（2026-08-18 全部激活）──────────────────────────
+#   ivol             特质波动率（FF3 残差年化标准差）
+#   ff3_betas        FF3 市场 Beta（= β_mkt）
+#   beta_smb         FF3 规模载荷 ★
+#   beta_hml         FF3 价值载荷 ★
+#   capm_beta        CAPM 市场 Beta（240日滚动）★
+#   ps_gamma         Pastor-Stambaugh Gamma ★
+#   ps_liq_beta      PS 流动性 Beta（36月滚动）★
+#   ap_beta1~5       Acharya-Pedersen 五个流动性 Beta（36月滚动）★
+#
+#   ★ = 本轮激活。原「需补 marketrtn_daily.csv」是伪缺口：
+#      ff3_daily.csv 的 MKT 是超额市场收益，r_m = MKT + Rf 即所需序列。
+#      详见 FACTORS.md「2026-08-18 新增」一节。
 #
 # 数据来源标注：
 #   [arch]   来自 _archive/raw_data/ 历史 CSV（2014-2020）
@@ -37,8 +43,14 @@
 import pandas as pd
 import numpy as np
 from typing import Optional, Dict
+import functools
+import logging
 import warnings
 from sklearn.linear_model import LinearRegression
+
+# 模块级 logger。原先各因子的 `log.warning(...)` 错误分支引用了一个从未定义的
+# 名字，一旦真的缺数据会抛 NameError 而不是打印警告（2026-08-18 补）。
+log = logging.getLogger(__name__)
 
 from src.data.loader import load_data, load_data_hk, to_monthly
 from src.data.universe import apply_universe, build_investable_mask, build_investable_mask_hk
@@ -663,84 +675,436 @@ def calc_volatility_30(
 
 
 # =============================================================================
-# ── 待激活因子（需额外数据，暂不调用）─────────────────────────────────────
-# 以下函数已完整实现（移植自 AF-pricing/Coding/factorcal.py），
-# 但需要 Database 中补充以下数据后才能激活：
-#   - 市场日度收益率序列（marketrtn_daily）
-#   - FF3 日度因子（RiskPremium, HML, SMB）
-#   - 无风险利率日度序列（rf_daily）
-# 激活方式：在 main() 中将对应 FACTOR_FLAGS 中的布林值改为 True。
+# ── 流动性风险因子（2026-08-18 激活）──────────────────────────────────────
+#
+# 这四个因子的代码骨架自建库起就在，一直卡在「缺 marketrtn_daily.csv」。
+# 实际上该序列无需另行下载：`ff3_daily.csv` 的 MKT 列按定义就是
+# 全市场可投资股票的 **VW 超额收益**（见 ff3_builder.py:289
+# `return (vw_ret - rf_aligned).rename('MKT')`），因此
+#
+#       r_m = MKT + Rf
+#
+# 即为所需的日度市场收益率。`ap_betas` 另需的「日度流通市值」就是
+# `neg_market_value.csv`。两项数据 2005-01-04 起全覆盖，故一并激活。
+#
+# 数学口径移植自 AF-pricing/Coding/factorcal.py（FactorGamma /
+# FactorLiquidityBeta / FactorLiquidityBetaAP / FactorBeta），但原实现
+# 是「月份 × 股票」双重 sklearn 循环，在 5861 只股票上不可行，
+# 此处一律改为批量最小二乘（与 `_rolling_ff3_ols` 同一套解法）。
 # =============================================================================
 
-def _calc_ps_gamma(data: dict) -> pd.DataFrame:
+def _load_market_return_daily(start: Optional[str] = None,
+                              end: Optional[str] = None) -> Optional[pd.Series]:
+    """日度市场收益率 r_m = MKT + Rf（取自 ff3_daily.csv）。
+
+    MKT 是 **超额** 市场收益（ff3_builder 里已减去 Rf），加回 Rf 才是
+    PS Gamma / CAPM Beta 所需的原始市场收益。
     """
-    [待激活] Pastor-Stambaugh (2003) Gamma 流动性指标。
+    from pathlib import Path
 
-    月度截面回归：r^e_{i,d+1} = θ + φ·r_{i,d} + γ·sign(r^e_{i,d})·vol_{i,d} + ε
-    其中 r^e = r_i - r_market（超额收益），vol = 成交额（百万元）。
-    γ 为流动性系数，值越负表示流动性越差。
+    ff3_path = Path("/Users/louis/MyProjects/Database/data/factors/ff3_daily.csv")
+    if not ff3_path.exists():
+        log.warning(f"[market_ret] FF3 日度文件不存在：{ff3_path}")
+        return None
 
-    需要数据：close（日度）、amt（千元）、marketrtn_daily（日度市场收益率）
+    ff3 = pd.read_csv(ff3_path, index_col=0, parse_dates=True)
+    mkt = (ff3["MKT"] + ff3["Rf"]).rename("mkt_ret")
+    if start:
+        mkt = mkt.loc[start:]
+    if end:
+        mkt = mkt.loc[:end]
+    return mkt.dropna()
+
+
+def _batch_ols(X: np.ndarray, Y: np.ndarray, min_obs: int):
+    """一次拟合 N 列因变量：对每列取自己的非空行解 (X'X)β = X'y。
+
+    X : T×K（**须已含截距列**）   Y : T×N（可含 NaN）
+    返回 (beta N×K, n_obs N, ok N)。与逐列 `LinearRegression().fit()`
+    解同一组正规方程；用 pinv 而非 solve，对奇异矩阵优雅退化。
+    """
+    T, K = X.shape
+    N = Y.shape[1]
+
+    M     = ~np.isnan(Y)
+    Mf    = M.astype(np.float64)
+    Y0    = np.where(M, Y, 0.0)
+    n_obs = M.sum(axis=0)
+
+    XtX = np.empty((N, K, K))
+    for i in range(K):
+        for j in range(i, K):
+            v = Mf.T @ (X[:, i] * X[:, j])
+            XtX[:, i, j] = v
+            XtX[:, j, i] = v
+    Xty = (X.T @ Y0).T
+
+    beta = np.full((N, K), np.nan)
+    ok = n_obs >= min_obs
+    if ok.any():
+        beta[ok] = np.einsum('nij,nj->ni', np.linalg.pinv(XtX[ok]), Xty[ok])
+    return beta, n_obs, ok
+
+
+@functools.lru_cache(maxsize=4)
+def _ps_gamma_raw(start: Optional[str] = None,
+                  end: Optional[str] = None) -> pd.DataFrame:
+    """PS Gamma 的原始月度面板（未经 preprocess，供 ps_liq_beta 复用）。
+
+    逐月对每只股票做日内回归（Pastor-Stambaugh 2003 式 (1)）：
+
+        r^e_{i,d+1} = θ + φ·r_{i,d} + γ·sign(r^e_{i,d})·v_{i,d} + ε
+
+    其中 r^e = r_i - r_m（个股减市场），v 为成交额（百万元）。
+    γ < 0 表示「成交量推动价格反转」即流动性差；γ 越负越不流动。
+    月内最少 PS_GAMMA_MIN_OBS(=10) 个有效交易日。
+    """
+    data = load_data([_CLOSE, "amt"], start=start, end=end)
+    close, amt = data.get(_CLOSE), data.get("amt")
+    if close is None or amt is None:
+        log.warning("[ps_gamma] 缺少 close_adj 或 amt 数据")
+        return pd.DataFrame()
+
+    mkt = _load_market_return_daily(start=start, end=end)
+    if mkt is None:
+        return pd.DataFrame()
+
+    idx = close.index.intersection(amt.index).intersection(mkt.index)
+    close, amt, mkt = close.loc[idx], amt.loc[idx], mkt.loc[idx]
+
+    ret     = close.pct_change()
+    excess  = ret.sub(mkt, axis=0)              # r^e = r_i - r_m
+    amt_mn  = amt / 1e6                          # 元 → 百万元
+
+    # 右侧全部取滞后一日：sign(r^e_{i,d})·v_{i,d} 与 r_{i,d} 对齐到 d+1
+    x_ret  = ret.shift(1)
+    x_sgnv = np.sign(excess.shift(1)) * amt_mn.shift(1)
+    x_sgnv = x_sgnv.replace([np.inf, -np.inf], np.nan)
+
+    cols = close.columns
+    periods = excess.index.to_period("M")
+    rows, dates = [], []
+
+    for ym in periods.unique():
+        m = periods == ym
+        Y = excess.values[m]                        # T×N 因变量
+        A = x_ret.values[m]                         # T×N 回归元1（逐股不同）
+        B = x_sgnv.values[m]                        # T×N 回归元2（逐股不同）
+        if Y.shape[0] < PS_GAMMA_MIN_OBS:
+            continue
+
+        # 三者任一缺失该观测即无效
+        M = ~(np.isnan(Y) | np.isnan(A) | np.isnan(B))
+        n_obs = M.sum(axis=0)
+        A0, B0, Y0 = (np.where(M, v, 0.0) for v in (A, B, Y))
+        Mf = M.astype(np.float64)
+
+        # 逐股的 3×3 正规方程，一次性堆叠求解（回归元逐股不同，
+        # 故不能走 _batch_ols 的「共享 X」路径，需手工组装各阶矩）
+        XtX = np.empty((len(cols), 3, 3))
+        XtX[:, 0, 0] = n_obs
+        XtX[:, 0, 1] = XtX[:, 1, 0] = A0.sum(axis=0)
+        XtX[:, 0, 2] = XtX[:, 2, 0] = B0.sum(axis=0)
+        XtX[:, 1, 1] = (A0 * A0).sum(axis=0)
+        XtX[:, 1, 2] = XtX[:, 2, 1] = (A0 * B0).sum(axis=0)
+        XtX[:, 2, 2] = (B0 * B0).sum(axis=0)
+        Xty = np.column_stack([(Mf * Y0).sum(axis=0),
+                               (A0 * Y0).sum(axis=0),
+                               (B0 * Y0).sum(axis=0)])
+
+        gamma = np.full(len(cols), np.nan)
+        ok = n_obs >= PS_GAMMA_MIN_OBS
+        if ok.any():
+            sol = np.einsum('nij,nj->ni', np.linalg.pinv(XtX[ok]), Xty[ok])
+            gamma[ok] = sol[:, 2]                   # γ = 第 3 个系数
+
+        rows.append(pd.Series(gamma, index=cols))
+        # 用**日历月末**标签，与 loader.to_monthly 的 resample("ME") 一致；
+        # 若用当月最后交易日，遇到月末落在周末的月份就对不齐（实测 235 个月
+        # 只有 156 个能与 to_monthly 的索引相交）。
+        dates.append(ym.to_timestamp("M"))
+
+    if not dates:
+        return pd.DataFrame()
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(dates)).sort_index()
+
+
+def _calc_ps_gamma(start: Optional[str] = None,
+                   end: Optional[str] = None) -> pd.DataFrame:
+    """
+    Pastor-Stambaugh (2003) Gamma 流动性指标（月度）。
+
+    γ 是「成交量对次日收益反转的推动力度」：越负 → 单位成交额引起的价格
+    反转越大 → 流动性越差。因此 **γ 低 = 不流动 = 预期收益高**，
+    与 amihud 方向相反（amihud 高 = 不流动）。
+
+    需要数据：close_adj（日度）、amt（日度，元）、ff3_daily（推市场收益）
     来源：[af] factorcal.py FactorGamma
     """
-    # TODO: 激活条件 - Database 中补充 marketrtn_daily.csv
-    raise NotImplementedError(
-        "[microstructure] PS Gamma 尚未激活。"
-        "请在 Database 中补充 marketrtn_daily 数据后在 main() 中启用。"
-    )
+    gamma = _ps_gamma_raw(start=start, end=end)
+    if gamma.empty:
+        return pd.DataFrame()
+    return preprocess(gamma)
 
 
-def _calc_ps_liq_beta(gamma: pd.DataFrame, mktcap: pd.DataFrame) -> pd.DataFrame:
+def _calc_ps_liq_beta(start: Optional[str] = None,
+                      end: Optional[str] = None) -> pd.DataFrame:
     """
-    [待激活] Pastor-Stambaugh (2003) 流动性 Beta（36月滚动）。
+    Pastor-Stambaugh (2003) 流动性 Beta（36 月滚动）。
 
-    Step1: 聚合流动性水平 γ_t（市值加权）
-    Step2: 流动性变化 Δγ_t
-    Step3: AR 回归创新项 Lm（流动性冲击）
-    Step4: 36月滚动回归 r_i ~ r_m + Lm，取 Lm 系数为 PSL Beta
+    Step1 市场流动性水平：γ_t 的**流通市值加权**截面均值
+    Step2 规模调整的流动性变化：Δγ_t（PS 原文用 (m_t/m_1) 缩放，此处
+          用市值加权已隐含规模权重，直接取一阶差分）
+    Step3 流动性冲击 L_t：对 Δγ_t 做 AR(1) 回归取残差（不可预测部分）
+    Step4 逐股 36 月滚动回归 r_i = α + b·r_m + c·L_t + ε，取 c 为因子
 
-    需要数据：PS Gamma 序列、市值序列、市场收益率
+    c > 0 表示该股在市场流动性恶化时跌得更多（流动性风险暴露高），
+    按 PS 原文应要求更高的预期收益。
+
+    需要数据：ps_gamma、neg_market_value、月度收益率、ff3_daily
     来源：[af] factorcal.py FactorLiquidityBeta
     """
-    raise NotImplementedError(
-        "[microstructure] PS Liquidity Beta 尚未激活。"
-        "需先激活 PS Gamma，并在 Database 中补充市场收益率数据。"
-    )
+    gamma = _ps_gamma_raw(start=start, end=end)
+    if gamma.empty:
+        return pd.DataFrame()
+
+    # ── Step1：市值加权的市场流动性水平 ────────────────────────────
+    mv_d = load_data(["neg_market_value"], start=start, end=end).get("neg_market_value")
+    if mv_d is None:
+        log.warning("[ps_liq_beta] 缺少 neg_market_value 数据")
+        return pd.DataFrame()
+    mv = to_monthly(mv_d, method="last").reindex(index=gamma.index,
+                                                 columns=gamma.columns)
+
+    w = mv.where(gamma.notna())
+    w = w.div(w.sum(axis=1), axis=0)
+    gamma_m = (gamma * w).sum(axis=1, min_count=1)
+
+    # ── Step2-3：一阶差分 → AR(1) 残差 = 流动性冲击 ────────────────
+    dg = gamma_m.diff()
+    ar = pd.DataFrame({"y": dg, "x": dg.shift(1)}).dropna()
+    if len(ar) < 24:
+        log.warning("[ps_liq_beta] 流动性序列过短，无法估计 AR(1)")
+        return pd.DataFrame()
+    b = np.polyfit(ar["x"].values, ar["y"].values, 1)
+    liq_shock = (ar["y"] - (b[0] * ar["x"] + b[1])).rename("L")
+
+    # ── Step4：36 月滚动回归 r_i = α + b·r_m + c·L ─────────────────
+    from src.backtest.engine import calc_monthly_returns
+    ret_m = calc_monthly_returns(start=start, end=end, market="A")
+
+    mkt_d = _load_market_return_daily(start=start, end=end)
+    mkt_m = (1 + mkt_d).groupby(mkt_d.index.to_period("M")).prod() - 1
+    mkt_m.index = mkt_m.index.to_timestamp("M")
+
+    idx = ret_m.index.intersection(liq_shock.index).intersection(mkt_m.index)
+    ret_m, L, rm = ret_m.loc[idx], liq_shock.loc[idx], mkt_m.loc[idx]
+
+    cols, rows, dates = ret_m.columns, [], []
+    for i in range(PS_BETA_WINDOW_MONTHS - 1, len(idx)):
+        sl = slice(i - PS_BETA_WINDOW_MONTHS + 1, i + 1)
+        X = np.column_stack([np.ones(PS_BETA_WINDOW_MONTHS),
+                             rm.values[sl], L.values[sl]])
+        Y = ret_m.values[sl]
+        beta, _, ok = _batch_ols(X, Y, min_obs=24)
+        rows.append(pd.Series(np.where(ok, beta[:, 2], np.nan), index=cols))
+        dates.append(idx[i])
+
+    if not dates:
+        return pd.DataFrame()
+    return preprocess(pd.DataFrame(rows, index=pd.DatetimeIndex(dates)))
 
 
-def _calc_ap_betas(data: dict) -> Dict[str, pd.DataFrame]:
-    """
-    [待激活] Acharya-Pedersen (2005) 五个流动性 Beta（β1-β5，36月滚动）。
+@functools.lru_cache(maxsize=4)
+def _ap_betas_raw(start: Optional[str] = None,
+                  end: Optional[str] = None) -> Dict[str, pd.DataFrame]:
+    """Acharya-Pedersen (2005) 五个流动性 Beta 的原始月度面板。
 
-    β1: Cov(R_i, R_M) / Var(R_M - C_M)        市场收益 Beta
-    β2: Cov(C_i, C_M) / Var(R_M - C_M)        流动性-流动性 Beta
-    β3: Cov(R_i, C_M) / Var(R_M - C_M)        收益-流动性 Beta
-    β4: Cov(C_i, R_M) / Var(R_M - C_M)        流动性-收益 Beta
-    β5: β2 - β3 - β4                           净流动性 Beta
+    先把 Amihud 非流动性折算成「交易成本」c_i（AP 原文式 (12)）：
 
-    需要数据：close（日度）、amt（千元）、marketvalue（日度市值）
+        c_i,t = min(AP_C1 + AP_C2 · ILLIQ_i,t · mv_ratio_t, AP_C3)
+
+    其中 mv_ratio 用市场总市值相对基期的比值做通胀调整，AP_C3(=60%) 是
+    成本上限，防止极端不流动股把协方差矩阵带跑。随后 36 月滚动计算：
+
+        β1 = Cov(R_i, R_M) / Var(R_M − C_M)     传统市场 Beta
+        β2 = Cov(c_i, c_M) / Var(R_M − C_M)     流动性共动
+        β3 = Cov(R_i, c_M) / Var(R_M − C_M)     收益对市场流动性的暴露
+        β4 = Cov(c_i, R_M) / Var(R_M − C_M)     流动性对市场收益的暴露
+        β5 = β2 − β3 − β4                       净流动性 Beta
+
+    AP 原文的定价含义：β2 越高、β3/β4 越负 → 流动性风险越大 → 要求补偿。
     来源：[af] factorcal.py FactorLiquidityBetaAP
-    参数：c1=0.25, c2=0.30, c3=60（illiquidity cost 上限）
     """
-    raise NotImplementedError(
-        "[microstructure] AP Betas 尚未激活。"
-        "请在 Database 中补充 marketvalue（流通市值日度序列）后启用。"
-    )
+    data = load_data([_CLOSE, "amt", "neg_market_value"], start=start, end=end)
+    close = data.get(_CLOSE)
+    amt   = data.get("amt")
+    mv    = data.get("neg_market_value")
+    if close is None or amt is None or mv is None:
+        log.warning("[ap_betas] 缺少 close_adj / amt / neg_market_value 数据")
+        return {}
+
+    # ── 日度 Amihud 非流动性 → 月度均值 ───────────────────────────
+    #
+    # ⚠️ 这里**不能**用全局 ILLIQ_SCALE(=1e5)。AP 的 c1/c2/c3(0.25/0.30/60)
+    # 是一组有量纲的标定值，只在 ILLIQ 落在 O(0.01~1) 时才有意义。
+    # 参照实现 factorcal.py 的 `amount` 单位是**千元**，而 Database 的
+    # `amt.csv` 单位是**元**（indicators.csv: 成交额(元)），差 1000 倍。
+    # 沿用 1e5 会让 ILLIQ 中位数只有 2.6e-5，c ≡ 0.25 几乎完全是常数
+    # （实测截面标准差 0.002 vs 水平 0.25），β2~β4 退化成纯噪声。
+    # 故此处用 1e5 × 1000 = 1e8，与参照实现的标定对齐。
+    #
+    # 不改全局 ILLIQ_SCALE 是因为 amihud 因子依赖它，而对 amihud 来说
+    # 它只是个单调缩放（不影响 IC/分组），改了反而会让既有缓存失效。
+    AP_ILLIQ_SCALE = ILLIQ_SCALE * 1000.0
+
+    ret = close.pct_change()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        illiq_d = (ret.abs() / amt.where(amt > 0)) * AP_ILLIQ_SCALE
+    illiq_m = to_monthly(illiq_d, method="mean")
+
+    ret_m = to_monthly(close, method="last").pct_change()
+    mv_m  = to_monthly(mv, method="last")
+
+    # ── 通胀调整比值：市场总市值 / 基期总市值 ─────────────────────
+    mv_tot = mv_m.sum(axis=1, min_count=1)
+    mv_ratio = (mv_tot / mv_tot.iloc[0]).clip(upper=30.0)
+
+    # ── 折算为交易成本 c（上限 AP_C3）────────────────────────────
+    cost = (AP_C1 + AP_C2 * illiq_m.mul(mv_ratio, axis=0)).clip(upper=AP_C3)
+
+    # ── 市场侧：市值加权的 R_M 与 c_M ────────────────────────────
+    w = mv_m.where(ret_m.notna())
+    w = w.div(w.sum(axis=1), axis=0)
+    R_M = (ret_m * w).sum(axis=1, min_count=1)
+    wc = mv_m.where(cost.notna())
+    wc = wc.div(wc.sum(axis=1), axis=0)
+    c_M = (cost * wc).sum(axis=1, min_count=1)
+
+    idx = ret_m.index.intersection(cost.index).intersection(R_M.dropna().index)
+    ret_m, cost = ret_m.loc[idx], cost.loc[idx]
+    R_M, c_M = R_M.loc[idx], c_M.loc[idx]
+
+    cols = ret_m.columns
+    out = {k: [] for k in ("ap_beta1", "ap_beta2", "ap_beta3", "ap_beta4", "ap_beta5")}
+    dates = []
+
+    W = AP_BETA_WINDOW_MONTHS
+    for i in range(W - 1, len(idx)):
+        sl = slice(i - W + 1, i + 1)
+        Ri, Ci = ret_m.values[sl], cost.values[sl]
+        Rm, Cm = R_M.values[sl], c_M.values[sl]
+
+        denom = np.var(Rm - Cm, ddof=1)
+        if not np.isfinite(denom) or denom <= 0:
+            continue
+
+        def _cov(Xn, y):
+            """逐列 Cov(X[:,k], y)，按各列自己的非空行计算。"""
+            M = ~np.isnan(Xn)
+            n = M.sum(axis=0)
+            X0 = np.where(M, Xn, 0.0)
+            yb = (M * y[:, None]).sum(axis=0) / np.where(n > 0, n, np.nan)
+            xb = X0.sum(axis=0) / np.where(n > 0, n, np.nan)
+            cov = ((X0 - xb) * np.where(M, y[:, None] - yb, 0.0)).sum(axis=0)
+            return np.where(n >= 24, cov / np.where(n > 1, n - 1, np.nan), np.nan)
+
+        b1 = _cov(Ri, Rm) / denom
+        b2 = _cov(Ci, Cm) / denom
+        b3 = _cov(Ri, Cm) / denom
+        b4 = _cov(Ci, Rm) / denom
+        b5 = b2 - b3 - b4
+
+        for k, v in zip(out, (b1, b2, b3, b4, b5)):
+            out[k].append(pd.Series(v, index=cols))
+        dates.append(idx[i])
+
+    if not dates:
+        return {}
+    return {k: pd.DataFrame(v, index=pd.DatetimeIndex(dates)) for k, v in out.items()}
 
 
-def _calc_capm_beta(data: dict) -> pd.DataFrame:
+def _make_ap_beta_getter(key: str):
+    """为 ap_beta1~5 各生成一个符合框架签名的因子函数。"""
+    def _f(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
+        res = _ap_betas_raw(start=start, end=end)
+        if not res or key not in res:
+            return pd.DataFrame()
+        return preprocess(res[key])
+    _f.__name__ = f"_calc_{key}"
+    _f.__doc__ = f"Acharya-Pedersen (2005) {key}，36 月滚动。见 _ap_betas_raw。"
+    return _f
+
+
+_calc_ap_beta1 = _make_ap_beta_getter("ap_beta1")
+_calc_ap_beta2 = _make_ap_beta_getter("ap_beta2")
+_calc_ap_beta3 = _make_ap_beta_getter("ap_beta3")
+_calc_ap_beta4 = _make_ap_beta_getter("ap_beta4")
+_calc_ap_beta5 = _make_ap_beta_getter("ap_beta5")
+
+
+def _calc_capm_beta(start: Optional[str] = None,
+                    end: Optional[str] = None) -> pd.DataFrame:
     """
-    [待激活] CAPM 市场 Beta（240日滚动 OLS，月末取值）。
+    CAPM 市场 Beta（240 交易日滚动 OLS，月末取值）。
 
-    r_i = α + β × r_m + ε，β 为市场 Beta，最少需 200 个有效观测。
+    r_i = α + β·r_m + ε
 
-    需要数据：close（日度）、marketrtn_daily（日度市场收益率）
+    用原始收益而非超额收益：rf 在截面上是常数，会被截距吸收，β 完全相同
+    （原 factorcal.py FactorBeta 的注释也是这么说的）。
+    窗口 CAPM_BETA_WINDOW(=240)，最少 MIN_ROLLING_VALID_DAYS 有效观测。
+
+    闭式解 β = Cov(r_i, r_m) / Var(r_m)，与逐股 OLS 等价。
+
+    需要数据：close_adj（日度）、ff3_daily（推市场收益）
     来源：[af] factorcal.py FactorBeta
     """
-    raise NotImplementedError(
-        "[microstructure] CAPM Beta 尚未激活。"
-        "请在 Database 中补充 marketrtn_daily 数据后启用。"
-    )
+    close = load_data([_CLOSE], start=start, end=end).get(_CLOSE)
+    if close is None:
+        log.warning("[capm_beta] 缺少 close_adj 数据")
+        return pd.DataFrame()
+
+    mkt = _load_market_return_daily(start=start, end=end)
+    if mkt is None:
+        return pd.DataFrame()
+
+    idx = close.index.intersection(mkt.index)
+    ret, mkt = close.loc[idx].pct_change(), mkt.loc[idx]
+
+    cols = ret.columns
+    monthly_dates = pd.date_range(start=idx[0], end=idx[-1], freq="ME")
+    rows, dates = [], []
+
+    for month_end in monthly_dates:
+        pos = idx <= month_end
+        if pos.sum() < CAPM_BETA_WINDOW:
+            continue
+        sl = np.where(pos)[0][-CAPM_BETA_WINDOW:]
+
+        Y = ret.values[sl]                       # T×N
+        x = mkt.values[sl]                       # T
+        good = ~np.isnan(x)
+        Y, x = Y[good], x[good]
+
+        M = ~np.isnan(Y)
+        n = M.sum(axis=0)
+        Y0 = np.where(M, Y, 0.0)
+        # 每只股票用自己的非空行算均值，与逐股 dropna 后回归一致
+        with np.errstate(invalid="ignore", divide="ignore"):
+            xb = (M * x[:, None]).sum(axis=0) / np.where(n > 0, n, np.nan)
+            yb = Y0.sum(axis=0) / np.where(n > 0, n, np.nan)
+            xc = np.where(M, x[:, None] - xb, 0.0)
+            cov = (xc * np.where(M, Y0 - yb, 0.0)).sum(axis=0)
+            var = (xc ** 2).sum(axis=0)
+            beta = np.where((n >= MIN_ROLLING_VALID_DAYS) & (var > 0),
+                            cov / np.where(var > 0, var, np.nan), np.nan)
+
+        rows.append(pd.Series(beta, index=cols))
+        dates.append(month_end)
+
+    if not dates:
+        return pd.DataFrame()
+    return preprocess(pd.DataFrame(rows, index=pd.DatetimeIndex(dates)))
 
 
 def _rolling_ff3_ols(ret_excess: pd.DataFrame,
@@ -830,6 +1194,36 @@ def _rolling_ff3_ols(ret_excess: pd.DataFrame,
     if not dates:
         return {}
     return {k: pd.DataFrame(v, index=dates) for k, v in out.items()}
+
+
+@functools.lru_cache(maxsize=4)
+def _ff3_rolling_result(start: Optional[str] = None,
+                        end: Optional[str] = None) -> dict:
+    """加载日度超额收益 + FF3，跑一次 `_rolling_ff3_ols`，结果按 (start,end) 缓存。
+
+    ivol / ff3_betas / beta_smb / beta_hml 四个因子解的是同一组回归，
+    共用此函数可避免在一次回测里重复跑四遍（每遍约 10 秒）。
+    """
+    from pathlib import Path
+
+    close = load_data([_CLOSE], start=start, end=end).get(_CLOSE)
+    if close is None:
+        log.warning("[ff3_rolling] 缺少 close_adj 数据")
+        return {}
+
+    ff3_path = Path("/Users/louis/MyProjects/Database/data/factors/ff3_daily.csv")
+    if not ff3_path.exists():
+        log.warning(f"[ff3_rolling] FF3 文件不存在：{ff3_path}")
+        return {}
+
+    ff3 = pd.read_csv(ff3_path, index_col=0, parse_dates=True)[['MKT', 'SMB', 'HML', 'Rf']]
+
+    ret_d = close.pct_change()
+    idx = ret_d.index.intersection(ff3.index)
+    ret_d, ff3 = ret_d.loc[idx], ff3.loc[idx]
+
+    ret_excess = ret_d.sub(ff3['Rf'], axis=0)
+    return _rolling_ff3_ols(ret_excess, ff3[['MKT', 'SMB', 'HML']].copy())
 
 
 def _calc_ivol(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
@@ -944,24 +1338,47 @@ def _calc_ff3_betas(start: Optional[str] = None, end: Optional[str] = None) -> p
         return pd.DataFrame()
 
     beta_mkt_df = res['beta_mkt']
-    beta_smb_df = res['beta_smb']
-    beta_hml_df = res['beta_hml']
 
-    # 合并三个 beta 为单个 DataFrame（作为多列因子）
-    # 主列为 beta_mkt（市场 Beta），其他两列为辅助
-    combined = pd.concat([
-        beta_mkt_df.rename(columns=lambda x: f'beta_mkt_{x}'),
-        beta_smb_df.rename(columns=lambda x: f'beta_smb_{x}'),
-        beta_hml_df.rename(columns=lambda x: f'beta_hml_{x}'),
-    ], axis=1)
+    # 只返回 beta_mkt。SMB / HML 载荷改由下面两个独立因子提供
+    # （原先塞进 result.attrs，而 attrs 在 to_csv/read_csv 缓存往返中会丢失，
+    #   等于白算；2026-08-18 拆分）。
+    return preprocess(beta_mkt_df)
 
-    # 取第一个 beta（MKT）作为主因子返回，用于标准回测流程
-    # 其他 beta 保留在 DataFrame 的其他列中供选择性使用
-    result = preprocess(beta_mkt_df)
-    # 附加其他列供后续参考
-    result.attrs['beta_smb'] = beta_smb_df
-    result.attrs['beta_hml'] = beta_hml_df
 
-    return result
+def _calc_beta_smb(start: Optional[str] = None,
+                   end: Optional[str] = None) -> pd.DataFrame:
+    """
+    Fama-French SMB 载荷（12 月滚动日度回归）。
+
+    r_i^e = α + β_mkt·MKT + β_smb·SMB + β_hml·HML + ε 中的 β_smb。
+    衡量个股对**规模因子**的暴露：高 → 表现更像小盘股。
+
+    与直接的 size 因子不同——size 是市值水平（特征），β_smb 是对规模
+    因子收益的协动（载荷）。GKX 两者都收，因为在 A 股未必同向。
+
+    需要数据：close_adj（日度）、ff3_daily
+    来源：[af] factorcal.py FactorBetaFF3
+    """
+    res = _ff3_rolling_result(start=start, end=end)
+    if not res:
+        return pd.DataFrame()
+    return preprocess(res['beta_smb'])
+
+
+def _calc_beta_hml(start: Optional[str] = None,
+                   end: Optional[str] = None) -> pd.DataFrame:
+    """
+    Fama-French HML 载荷（12 月滚动日度回归）。
+
+    衡量个股对**价值因子**的暴露：高 → 表现更像价值股。
+    与 bm（账面市值比，特征）的区别同 beta_smb 与 size 的区别。
+
+    需要数据：close_adj（日度）、ff3_daily
+    来源：[af] factorcal.py FactorBetaFF3
+    """
+    res = _ff3_rolling_result(start=start, end=end)
+    if not res:
+        return pd.DataFrame()
+    return preprocess(res['beta_hml'])
 
 
