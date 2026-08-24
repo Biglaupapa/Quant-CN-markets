@@ -12,15 +12,23 @@
 #
 # 因子缓存：
 #   因子值计算完成后自动保存至 output/cache/<factor>（缓存目录）
-#   下次运行时直接读取缓存，跳过重复计算。
-#   若需强制重新计算（如数据更新后），将 BACKTEST_CONFIG["force_recalc"] 设为 True。
+#   下次运行时先做新鲜度校验，通过才读缓存，否则自动重算并覆盖。
+#   校验两条判据（见 _cache_stale_reason）：
+#     ① 缓存文件 mtime 必须晚于 Database 源目录的最新 mtime
+#        → Database 跑过 update.py / 换过数据源，缓存立即失效
+#     ② 缓存末行必须覆盖到本次 BACKTEST_END 所在月末
+#        → 跨月后缓存自动失效
+#   因此常规使用保持 force_recalc=False 即可，不必手工判断该不该重算。
+#   只有「改了因子计算逻辑本身」（Database 数据没动，mtime 不变）才需手工置 True。
 #
 # 待激活因子（标注 [需补充数据]）：
 #   这些因子代码已实现，但需要在 Database 中补充对应数据后才能启用。
 #   补充数据后将 False 改为 True 即可激活。
 # =============================================================================
 
+import contextlib
 import sys
+import time
 import warnings
 import functools
 import pandas as pd
@@ -29,7 +37,12 @@ from pathlib import Path
 # 确保项目根目录在 Python 路径中
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.config.settings import HIST_START, FACTOR_OUTPUT_DIR
+from src.config.settings import (
+    HIST_START,
+    FACTOR_OUTPUT_DIR,
+    DATABASE_DIR,
+    HK_DATABASE_DIR,
+)
 from src.strategy.combine_factors import (
     align_factor_directions,
     calc_rolling_icir_weights,
@@ -70,8 +83,12 @@ def _as_list(x):
 #   reversal/momentum/roll_spread/overnight_ret/volatility（依赖存档或不复权价格）
 # =============================================================================
 
-RUN_A  = True    # ← A 股回测开关
-RUN_HK = True    # ← 港股回测开关
+RUN_A  = True     # ← A 股回测开关
+RUN_HK = False    # ← 港股回测开关
+                  #   2026-08-23 关闭：港股数据冻结于 2026-07-17
+                  #   （Database/src/update.py 自 2026-08-17 起注释掉 US/HK 更新），
+                  #   月度回测最后一期不完整，结果不可用。
+                  #   恢复港股更新后再置回 True。
 
 # -----------------------------------------------------------------------------
 # 港股因子计算开关（仅 RUN_HK=True 时生效）
@@ -320,11 +337,12 @@ BACKTEST_CONFIG = {
                                    #    十分组是 GKX/JKP 的学术惯例，与 src/ml 对比时用。
     "freq":         12,            # 数据频率（月度=12，季度=4）
     "save_output":  True,          # 是否保存回测结果到 FACTOR_OUTPUT_DIR
-    "force_recalc": True,          # True = 忽略缓存、强制重新计算所有因子
-                                   # （数据更新后或修改因子逻辑后使用）
-                                   # ⚠️ 2026-08 A 股数据源换成 Choice，close_adj 的复权
-                                   #    基准与 iFinD 不同（000001.SZ 一类整条序列平移 16%），
-                                   #    旧缓存全部失效，必须置 True 跑一轮
+    "force_recalc": False,         # True = 无条件重算所有因子，忽略新鲜度校验
+                                   # False = 走新鲜度校验（推荐，见文件头「因子缓存」）
+                                   #   数据更新 / 跨月 会被自动识别并重算，
+                                   #   只有改了因子计算逻辑本身才需手工置 True。
+                                   # 注：2026-08 A 股数据源 iFinD→Choice 的全量重算
+                                   #     已于 2026-08-23 完成，缓存均已基于 Choice。
 }
 
 # =============================================================================
@@ -414,8 +432,97 @@ def _get_factor_func(factor_name: str):
 
 
 # =============================================================================
+# 阶段计时
+# =============================================================================
+#
+# 起因：实测「62 个因子全部命中缓存」仍要约 11 分钟，而读完 65 个缓存文件
+# （878 MB）只需 6 秒——说明耗时既不在因子计算、也不在缓存 IO，而在因子算完
+# **之后**那一段。但那一段里有两个嫌疑人（分组回测的 pandas 运算 vs
+# matplotlib 画图），在分清楚之前任何优化都是猜。
+#
+# 这里只做测量，不做优化：累计各阶段耗时，Step 2 结束时打印一张分布表。
+# 开销是每次调用一次 perf_counter，可忽略。
+
+_STAGE_SECS: dict[str, float] = {}
+
+
+@contextlib.contextmanager
+def _stage(name: str):
+    """累计某个阶段的耗时。嵌套安全（各自独立计各自的）。"""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        _STAGE_SECS[name] = _STAGE_SECS.get(name, 0.0) + time.perf_counter() - t0
+
+
+def _print_stage_breakdown() -> None:
+    """打印阶段耗时分布。无数据时静默跳过。"""
+    if not _STAGE_SECS:
+        return
+    total = sum(_STAGE_SECS.values())
+    if total <= 0:
+        return
+    print(f"\n{'─' * 60}")
+    print(f"  阶段耗时分布（合计 {total:.1f}s）")
+    print(f"{'─' * 60}")
+    for name, secs in sorted(_STAGE_SECS.items(), key=lambda kv: -kv[1]):
+        bar = "█" * max(1, round(secs / total * 30))
+        print(f"    {name:<18s} {secs:7.1f}s  {secs / total * 100:5.1f}%  {bar}")
+    print(f"{'─' * 60}")
+
+
+# =============================================================================
 # 主流程
 # =============================================================================
+
+@functools.lru_cache(maxsize=4)
+def _database_mtime(market: str) -> float:
+    """
+    Database 源目录下所有 CSV 的最新 mtime。
+
+    整轮回测只 stat 一次（lru_cache），62 个因子共用同一个值。
+    取整个目录的 max 而非单看 close.csv：choice_derive.py --promote 是
+    28 个文件一起拷入，但 listed_days.csv 由 choice_listed_days.py 单独
+    生效，晚几秒；且基本面因子读的是 pb/pe_ttm 而非 close。取 max 才不漏。
+    """
+    src_dir = HK_DATABASE_DIR if market == "HK" else DATABASE_DIR
+    return max((f.stat().st_mtime for f in src_dir.glob("*.csv")), default=0.0)
+
+
+def _cache_stale_reason(cache_path: Path, end, market: str) -> str | None:
+    """
+    缓存新鲜度校验。返回 None = 可用；返回字符串 = 失效原因（用于打印）。
+
+    判据 1  Database 数据比缓存新
+            → update.py 跑过、或数据源整体重建过，缓存基于旧数据，必须重算。
+    判据 2  缓存末行没覆盖到本次 BACKTEST_END 所在月末
+            → 跨月了，缓存短一期。
+
+    任一不满足即失效。校验失败一律返回原因而非抛错——最坏情况是多算一次，
+    不会因为缓存文件损坏让整轮回测挂掉。
+    """
+    try:
+        if cache_path.stat().st_mtime < _database_mtime(market):
+            return "Database 数据已更新"
+    except OSError:
+        return "缓存文件不可读"
+
+    # 只读第一列（日期索引），避免为了看一个日期把 15MB 宽表整个载入
+    try:
+        idx = pd.read_csv(cache_path, index_col=0, usecols=[0]).index
+        if len(idx) == 0:
+            return "缓存为空表"
+        last = pd.Timestamp(idx[-1])
+    except Exception:
+        return "缓存无法解析"
+
+    need = pd.Timestamp(end).to_period("M").to_timestamp("M")
+    if last < need:
+        return f"缓存末行 {last.date()} 未覆盖回测截止 {need.date()}"
+
+    return None
+
 
 def _load_factor_cached(
     factor_name: str,
@@ -432,25 +539,39 @@ def _load_factor_cached(
       - 缓存文件：CACHE_DIR/<cache_prefix><factor_name>.csv
       - A 股（默认）：cache_prefix=""，文件名如 "turnover_20.csv"
       - 港股：       cache_prefix="hk_"，文件名如 "hk_turnover_20.csv"
-      - 命中缓存且 force_recalc=False → 直接读取，跳过计算
-      - 未命中或 force_recalc=True   → 重新计算并写入缓存
+      - 命中缓存 + force_recalc=False + 通过新鲜度校验 → 直接读取，跳过计算
+      - 未命中 / force_recalc=True / 校验不通过        → 重新计算并覆盖缓存
+      新鲜度校验见 _cache_stale_reason（数据更新、跨月均会自动失效）。
     """
     cache_path = CACHE_DIR / f"{cache_prefix}{factor_name}.csv"
+    market = "HK" if cache_prefix == "hk_" else "A"
 
     if not force_recalc and cache_path.exists():
-        print(f"  ✓ 读取缓存：{cache_path.name}")
-        df = pd.read_csv(cache_path, index_col=0)
-        df.index = pd.to_datetime(df.index)
-        return df
+        stale = _cache_stale_reason(cache_path, end, market)
+        if stale is None:
+            print(f"  ✓ 读取缓存：{cache_path.name}")
+            df = pd.read_csv(cache_path, index_col=0)
+            df.index = pd.to_datetime(df.index)
+            return df
+        print(f"  ⟳ 缓存失效（{stale}），重算：{cache_path.name}")
 
     # 计算因子
     factor = func(start=start, end=end)
     if factor is None or factor.empty:
         return None
 
-    # 写入缓存
+    # 写入缓存。
+    # existed 必须在 to_csv **之前**取：写完之后 exists() 恒为 True，
+    # 原实现在写盘后才判断，于是「失效重算」被打印成「计算完成，已缓存」，
+    # 与首次计算长得一模一样——排查「缓存到底失效没有」时日志会误导人。
+    existed = cache_path.exists()
     factor.to_csv(cache_path)
-    action = "重新计算并缓存" if force_recalc and cache_path.exists() else "计算完成，已缓存"
+    if not existed:
+        action = "计算完成，已缓存"
+    elif force_recalc:
+        action = "强制重算并覆盖缓存"
+    else:
+        action = "失效重算并覆盖缓存"
     print(f"  ✓ {action}：{cache_path.name}  shape={factor.shape}")
     return factor
 
@@ -521,10 +642,11 @@ def _run_single_market(
 
         # 因子加载（缓存优先）
         try:
-            factor = _load_factor_cached(
-                factor_name, func, start, end, force_recalc,
-                cache_prefix=cache_prefix,
-            )
+            with _stage("因子加载/计算"):
+                factor = _load_factor_cached(
+                    factor_name, func, start, end, force_recalc,
+                    cache_prefix=cache_prefix,
+                )
             if factor is None or factor.empty:
                 print(f"  ✗ {factor_name} 返回空 DataFrame，跳过")
                 continue
@@ -539,14 +661,16 @@ def _run_single_market(
         # fwd_ret：下期收益（T月末因子 → 预测 T+1月收益，避免前瞻偏差）
         try:
             fwd_ret   = monthly_ret.shift(-1)
-            ic_series = calc_ic(factor, fwd_ret, method="spearman")
+            with _stage("calc_ic"):
+                ic_series = calc_ic(factor, fwd_ret, method="spearman")
 
             # n_groups 可以是 int 或 list。**首个分组数是主口径**：
             # 它的结果进 results（供多因子合成用）、输出文件不带后缀，
             # 与历史文件名和文档里的记录完全一致。
             # 其余分组数只额外产出一份带 `_gN` 后缀的报告，互不干扰。
             for gi, ng in enumerate(_as_list(n_groups)):
-                grp_ret = group_return(factor, fwd_ret, n_groups=ng)
+                with _stage("group_return"):
+                    grp_ret = group_return(factor, fwd_ret, n_groups=ng)
                 suffix  = "" if gi == 0 else f"_g{ng}"
 
                 if gi == 0:
@@ -556,21 +680,26 @@ def _run_single_market(
                         "ic_series": ic_series,
                     }
 
-                print_factor_report(f"{factor_name}{suffix}", grp_ret,
-                                    ic_series, freq=freq)
+                with _stage("print_report"):
+                    print_factor_report(f"{factor_name}{suffix}", grp_ret,
+                                        ic_series, freq=freq)
 
                 if save_out:
                     out_name = f"{factor_name}{suffix}"
-                    save_report(out_name, grp_ret, ic_series, stats_dir, freq=freq)
+                    with _stage("save_report"):
+                        save_report(out_name, grp_ret, ic_series, stats_dir,
+                                    freq=freq)
                     factor_direction = directions.get(factor_name, 1)
-                    plot_nav_curve(out_name, grp_ret, img_dir, freq=freq,
-                                   direction=factor_direction)
+                    with _stage("plot_nav_curve"):
+                        plot_nav_curve(out_name, grp_ret, img_dir, freq=freq,
+                                       direction=factor_direction)
 
         except Exception as e:
             warnings.warn(f"  ✗ {factor_name} 回测异常：{e}")
             continue
 
     # --- 步骤 3：单因子汇总 ---
+    _print_stage_breakdown()
     print(f"\n{'=' * 60}")
     print(f"  单因子完成！成功处理 {len(results)}/{len(active_factors)} 个因子")
     if results:
