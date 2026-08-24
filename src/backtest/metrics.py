@@ -112,25 +112,54 @@ def calc_ic(
     common_idx  = factor.index.intersection(forward_ret.index)
     common_cols = factor.columns.intersection(forward_ret.columns)
 
-    ic_series = {}
-    for date in common_idx:
-        f = factor.loc[date, common_cols].dropna()
-        r = forward_ret.loc[date, common_cols].reindex(f.index).dropna()
-        both = f.reindex(r.index).dropna()
-        r    = r.reindex(both.index)
+    # ── 为什么是向量化而不是逐月循环 ────────────────────────────────────────
+    # 原实现按 date 循环 234 次，每次做 4 次基于标签的 pandas 索引
+    # （`.loc[date, common_cols]` + 三次 reindex/dropna），common_cols 有
+    # 5867 个标签。scipy.spearmanr 本身在 5000 个元素上是毫秒级的，
+    # 真正的开销全在这 936 次宽表标签索引上——实测每月约 90ms，
+    # 62 个因子合计 **21.7 分钟，占整轮回测耗时的 95.4%**。
+    #
+    # 改法与本框架已有的四处向量化（见 CLAUDE.md「性能」一节）同源：
+    # 循环外一次性对齐，然后按行做矩阵运算。
+    #
+    # 秩相关 = 秩上的 Pearson 相关，这是 Spearman 的定义本身，不是近似。
+    # 关键是**掩码要先于排秩**：原实现是逐月把 factor 与 forward_ret 都非空
+    # 的那批股票挑出来、再在这个存活子集上算秩。若先排秩后掩码，秩的分母
+    # 会变，结果就不同了。下面 `where(mask)` 正是在复现这个顺序。
+    F = factor.loc[common_idx, common_cols]
+    R = forward_ret.loc[common_idx, common_cols]
 
-        if len(both) < 10:
-            ic_series[date] = np.nan
-            continue
+    mask = F.notna() & R.notna()          # 逐格「两边都有值」
+    F = F.where(mask)
+    R = R.where(mask)
 
-        if method == "spearman":
-            ic, _ = stats.spearmanr(both.values, r.values)
-        else:
-            ic, _ = stats.pearsonr(both.values, r.values)
+    if method == "spearman":
+        # rank 默认 method="average"（并列取平均秩）、na_option="keep"，
+        # 与 scipy.stats.rankdata 的默认行为一致。
+        F = F.rank(axis=1)
+        R = R.rank(axis=1)
 
-        ic_series[date] = ic
+    m = mask.to_numpy()
+    n = m.sum(axis=1)
+    a = np.nan_to_num(F.to_numpy(dtype=np.float64))   # 掩掉的格填 0
+    b = np.nan_to_num(R.to_numpy(dtype=np.float64))
 
-    return pd.Series(ic_series)
+    # 按行去均值再算 Pearson。均值用掩码手算而不用 np.nanmean：
+    # 整行全 NaN 时 nanmean 会抛 "Mean of empty slice" RuntimeWarning，
+    # 而早期月份（2007 年前后上市公司少）这种行确实存在。
+    # 去均值后必须再乘一次掩码——否则被掩掉的格会变成 −mean 混进求和。
+    with np.errstate(invalid="ignore", divide="ignore"):
+        a = (a - (a.sum(axis=1) / n)[:, None]) * m
+        b = (b - (b.sum(axis=1) / n)[:, None]) * m
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        denom = np.sqrt((a ** 2).sum(axis=1) * (b ** 2).sum(axis=1))
+        ic = np.where(denom > 0, (a * b).sum(axis=1) / denom, np.nan)
+
+    # 原实现的 `len(both) < 10 → NaN` 规则，原样保留
+    ic = np.where(n < 10, np.nan, ic)
+
+    return pd.Series(ic, index=common_idx)
 
 
 def ic_summary(ic_series: pd.Series) -> dict:
