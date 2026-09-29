@@ -129,6 +129,8 @@ FACTOR_DIRECTIONS = {
     "momentum_12_1":             -1,   # IC < 0，翻转
     "turnover_20":               -1,   # IC < 0，翻转
     "turnover_20_neutral":       -1,   # 同 turnover_20（待验证后确认）
+    "turnover_20_ff":            -1,   # 自由流通口径，方向同 turnover_20（待验证）
+    "turnover_20_ff_neutral":    -1,   # 同上
     "amihud":                    +1,   # IC > 0，保持
     "amihud_neutral":            +1,   # 同 amihud（待验证后确认）
     "amihud_zero_adj":           +1,   # IC > 0，保持
@@ -211,6 +213,8 @@ FACTOR_FLAGS = {
     "momentum_12_1":             True,    # 中期动量（12-1月）
     "turnover_20":               True,    # 换手率（20日均，无中性化）
     "turnover_20_neutral":       True,   # 换手率（20日均，流通市值中性化）
+    "turnover_20_ff":            True,    # 自由流通换手率（聚源，20日均，无中性化）
+    "turnover_20_ff_neutral":    True,    # 自由流通换手率（聚源，20日均，流通市值中性化）
     "amihud":                    True,    # Amihud 非流动性（3月滚动，成交额口径，无中性化）
     "amihud_neutral":            True,   # Amihud 非流动性（3月滚动，流通市值中性化）
     "amihud_zero_adj":           True,    # Amihud 零交易日调整版（log+NT修正，无中性化）
@@ -354,6 +358,7 @@ def _get_factor_func(factor_name: str):
     from src.factors.microstructure import (
         calc_reversal_20, calc_momentum_12_1,
         calc_turnover_20, calc_turnover_20_neutral,
+        calc_turnover_20_ff, calc_turnover_20_ff_neutral,
         calc_amihud, calc_amihud_neutral,
         calc_amihud_zero_adj, calc_amihud_zero_adj_neutral,
         calc_cs_spread, calc_roll_spread,
@@ -384,6 +389,8 @@ def _get_factor_func(factor_name: str):
         "volatility_30":             calc_volatility_30,
         # 微观结构（流通市值中性化）
         "turnover_20_neutral":       calc_turnover_20_neutral,
+        "turnover_20_ff":            calc_turnover_20_ff,
+        "turnover_20_ff_neutral":    calc_turnover_20_ff_neutral,
         "amihud_neutral":            calc_amihud_neutral,
         "amihud_zero_adj_neutral":   calc_amihud_zero_adj_neutral,
         # 风险 / 流动性风险

@@ -31,6 +31,8 @@ FACTOR_DISPLAY_NAMES = {
     "momentum_12_1":             "Momentum",
     "turnover_20":               "Inverse Turnover",          # 负向→取反显示
     "turnover_20_neutral":       "Inverse Turnover (Neutral)",# 负向→取反显示
+    "turnover_20_ff":            "Inverse FF Turnover",       # 自由流通口径
+    "turnover_20_ff_neutral":    "Inverse FF Turnover (Neutral)",
     "amihud":                    "Amihud",
     "amihud_neutral":            "Amihud (Neutral)",
     "amihud_zero_adj":           "Amihud (Zero Adj)",

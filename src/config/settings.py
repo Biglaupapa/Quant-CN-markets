@@ -93,6 +93,11 @@ DATABASE_FIELD_MAP = {
     "volume":          "volume.csv",
     "amt":             "amt.csv",
     "turn":            "turn.csv",
+    # 自由流通换手率（聚源 dz_stockperformance.TurnoverRateFreeFloat，%，日度；2026-09-29 接入）
+    # 分母 = 自由流通股本（流通股再剔除大股东/高管等长期持股），与 turn 同形、停牌日已置 NaN。
+    # 文件在 Database 的供应商隔离区，不在 data/stock/A/，故用相对路径跳出去。
+    # 生成：cd ~/MyProjects/Database && python3 src/jydb_extract.py --what turn_ff（需 VPN）
+    "turn_ff":         "../../vendor/jydb/turn_ff_jydb.csv",
     # 成交均价 VWAP（= AMOUNT/VOLUME，Choice 全精度；2026-08-18 接入）
     # ★ 这是相对 CRSP / JKP 的独有字段——美国学术库不提供日内 VWAP，
     #   故 close/vwap 偏离、VWAP 口径 Amihud 这类特征在英文文献里罕见。

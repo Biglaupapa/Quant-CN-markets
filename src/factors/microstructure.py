@@ -185,18 +185,25 @@ def calc_momentum_12_1(
 #    两个版本：
 #      turnover_20         无中性化（原始信号）
 #      turnover_20_neutral 流通市值中性化（neg_market_value，Datayes）
+#
+#    自由流通口径（2026-09-29 新增，聚源 turn_ff）：
+#      turnover_20_ff          无中性化
+#      turnover_20_ff_neutral  流通市值中性化
+#    与上面两个**只差分母**（自由流通股本 vs 流通股本），构建逻辑共用
+#    _calc_turnover_20_raw，窗口 / 投资域 / 月末取值 / 中性化全部一致。
 # -----------------------------------------------------------------------------
 
 def _calc_turnover_20_raw(
     start: Optional[str],
     end: Optional[str],
     market: str = "A",
+    field: str = "turn",
 ) -> tuple:
-    """内部辅助：返回 (factor_m, mask)，供两个版本共用。"""
+    """内部辅助：返回 (factor_m, mask)，供各版本共用。field 选日度换手字段。"""
     _load, _mask_builder = _get_market_loaders(market)
 
-    data = _load(["turn"], start=start, end=end)
-    turn = data.get("turn")
+    data = _load([field], start=start, end=end)
+    turn = data.get(field)
 
     if turn is None:
         warnings.warn("[microstructure] calc_turnover_20: 换手率数据加载失败，跳过")
@@ -247,6 +254,41 @@ def calc_turnover_20_neutral(
     log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
     if log_mktcap is None:
         warnings.warn("[microstructure] calc_turnover_20_neutral: 无法获取流通市值，退化为无中性化版本")
+        return preprocess(factor_m)
+
+    return preprocess(factor_m, neutralize="size", log_mktcap=log_mktcap)
+
+
+def calc_turnover_20_ff(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    自由流通换手率因子（无中性化）：同 turnover_20，日度换手改用自由流通口径。
+    数据：turn_ff（聚源，2005+，仅 A 股；停牌日已置 NaN，与 turn 一致）
+    """
+    factor_m, _ = _calc_turnover_20_raw(start, end, market="A", field="turn_ff")
+    if factor_m is None:
+        return pd.DataFrame()
+    return preprocess(factor_m)
+
+
+def calc_turnover_20_ff_neutral(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    自由流通换手率因子（流通市值中性化）：同 turnover_20_neutral，只换日度换手的分母。
+    中性化变量刻意保持 neg_market_value（而非自由流通市值），保证与
+    turnover_20_neutral 唯一的差别是换手率本身。
+    """
+    factor_m, mask = _calc_turnover_20_raw(start, end, market="A", field="turn_ff")
+    if factor_m is None:
+        return pd.DataFrame()
+
+    log_mktcap = _get_log_mktcap(start, end, mask, use_field="neg_market_value")
+    if log_mktcap is None:
+        warnings.warn("[microstructure] calc_turnover_20_ff_neutral: 无法获取流通市值，退化为无中性化版本")
         return preprocess(factor_m)
 
     return preprocess(factor_m, neutralize="size", log_mktcap=log_mktcap)
