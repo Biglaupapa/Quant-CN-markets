@@ -2,22 +2,23 @@
 # backtest/engine.py
 # 月度/季度分组回测核心
 #
-# 回测逻辑（延续 因子框架.py 框架）：
-#   - 月度换仓：月初开盘价买入，月末收盘价卖出
-#   - 月度收益率 = 月末后复权收盘价 / 月初后复权开盘价 - 1
-#   - 特殊处理：
-#       * 涨停开盘（开盘价=涨停价）→ 无法买入，排除
-#       * 跌停收盘（收盘价=跌停价）→ 无法卖出，特殊处理
+# 回测逻辑（2026-10-01 起与文献对齐，见 docs/【方法】回测口径与文献对齐.md）：
+#   - 月度换仓：t 月末组建（只用 t 月及以前信息筛选），持有 t+1 月
+#   - 月度收益率 = t+1 月末后复权收盘价 / t 月末后复权收盘价 - 1（收盘到收盘，LSY / HQZ / JKP）
+#   - 持有期不再筛选：t+1 月被戴 ST、停牌，收益照算（停牌日收盘价为停牌前价格，自然按最后价）
+#   - 退市：收益算到最后交易日，不打折
 #
-# 来源：[orig] 因子框架.py 回测逻辑
+# 2026-10-01 之前：月初开盘买入、月末收盘卖出，且持有期价格套用了 t+1 月逐日投资域掩码
+# → 持有期被 ST / 停牌的股票收益被截断或丢弃（丢弃者真实收益中位 −6.3%），系统性高估收益。
+# 开盘入场口径未找到文献采用，已删除。
 # =============================================================================
 
 import pandas as pd
 import numpy as np
 from typing import Optional
 
-from src.data.loader import load_data, load_data_hk, to_monthly
-from src.data.universe import build_investable_mask, build_investable_mask_hk, apply_universe
+from src.data.loader import load_data, load_data_hk
+from src.data.universe import build_investable_mask, build_investable_mask_hk
 
 
 def calc_monthly_returns(
@@ -26,57 +27,45 @@ def calc_monthly_returns(
     market: str = "A",
 ) -> pd.DataFrame:
     """
-    计算月度持仓收益率矩阵。
+    月度持有收益率矩阵（收盘到收盘，持有期不筛选）。
 
-    月度收益率 = 月末后复权收盘价 / 月初后复权开盘价 - 1
+        ret[m] = close_adj[m 月最后交易日] / close_adj[m-1 月最后交易日] - 1
 
-    A 股特殊处理：
-    - 涨停开盘（开盘 >= 前收 × 1.099）→ 置 NaN，无法建仓
-    - 港股无每日涨跌停限制，跳过此过滤
+    index = 收益实现月的月末（与原约定一致：调用方用 `.shift(-1)` 得到 t 月因子对应的 t+1 月收益）。
+
+    两层，各管一件事：
+
+    1. **组建（t 月末）**：t 月末不在投资域的股票，其 t+1 月收益置 NaN。只用 t 月末信息，
+       在这里落实是因为所有下游（单因子 IC、分组、合成、ML 基准）都用这张矩阵——一处生效。
+       （因子侧按日计算后取「当月最后有效值」，月末当天停牌 / ST 的股票仍带因子值，
+       2026-10-01 实测占各因子 1%~3%；不能依赖因子侧自己剔除。）
+    2. **持有（t+1 月）**：价格**不套投资域掩码**。入组后发生的 ST、停牌、退市都按真实价格计入
+       ——LSY / HQZ / JKP 的口径，避免「持续筛选预先排除未来输家」。
+
+    - 停牌：原始数据停牌日 CLOSE 为停牌前价格 → 自然按最后价，整月停牌收益为 0
+    - 退市：月内最后交易日之后无价格；若当月一天未交易就退市，`ffill(limit=1)` 让该月
+      收益为 0（按最后价退出），再往后不延续
+    - 不打退市折价（A 股文献未加；退市整理期跌幅已在价格中）
 
     Parameters
     ----------
     market : str
         "A"（默认，A股）或 "HK"（港股）
-
-    Returns
-    -------
-    pd.DataFrame
-        月度收益率，index=月末日期，columns=股票代码
     """
-    if market == "HK":
-        data = load_data_hk(["close_adj", "open_adj"], start=start, end=end)
-        mask = build_investable_mask_hk(start=start, end=end, freq="D")
-    else:
-        data = load_data(["close_adj", "open_adj"], start=start, end=end)
-        mask = build_investable_mask(start=start, end=end, freq="D")
+    loader, mask_fn = ((load_data_hk, build_investable_mask_hk) if market == "HK"
+                       else (load_data, build_investable_mask))
+    close = loader(["close_adj"], start=start, end=end).get("close_adj")
+    if close is None:
+        raise ValueError(f"[engine] 缺少 close_adj 数据（market={market}）")
 
-    close = data.get("close_adj")
-    open_ = data.get("open_adj")
+    # 持有：不套掩码的月末（或当月最后可得）收盘价
+    close_me = close.resample("ME").last().ffill(limit=1)
+    ret = close_me / close_me.shift(1) - 1
 
-    if close is None or open_ is None:
-        raise ValueError(f"[engine] 缺少 close_adj 或 open_adj 数据（market={market}）")
-
-    close = apply_universe(close, mask)
-    open_ = apply_universe(open_, mask)
-
-    # 月初开盘价（月第一个交易日开盘）
-    # replace(0, nan)：开盘价为零时（涨跌停锁板等异常）不能作分母，否则收益率为 inf
-    open_month_start = open_.resample("ME").first().replace(0, np.nan)
-    # 月末收盘价
-    close_month_end  = close.resample("ME").last()
-
-    # 月度收益
-    monthly_ret = close_month_end / open_month_start - 1
-
-    # A 股涨停开盘过滤：月初开盘价 >= 前月末收盘 × 1.099 → NaN（无法买入）
-    # 港股无每日涨跌停限制，跳过此过滤
-    if market != "HK":
-        prev_close_m  = close_month_end.shift(1)
-        limit_up_open = (open_month_start >= prev_close_m * 1.099)
-        monthly_ret[limit_up_open] = np.nan
-
-    return monthly_ret
+    # 组建：t 月末可投资 → 才有 t+1 月收益（shift(1) 把 t 月末的判断对齐到 t+1 行）
+    formed = mask_fn(start=start, end=end, freq="M").shift(1)
+    formed = formed.reindex(index=ret.index, columns=ret.columns).fillna(False).astype(bool)
+    return ret.where(formed)
 
 
 def group_return(
