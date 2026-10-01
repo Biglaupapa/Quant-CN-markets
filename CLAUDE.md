@@ -560,6 +560,29 @@ residuals = y - (model.intercept_ + model.predict(X))
 | ~~3~~ | ~~`pb` 换 Choice `PB`~~ | ✅ **已完成 2026-08-17** |
 | 6 | `BACKTEST_START` 是否改 2005 | 数据已支持，但 2005~2006 A 股仅 1300~1400 只、股改期间大量停牌 |
 
+### 成果记录（2026-09-30 登记）
+
+成果分散在四处、新旧不一，没有一份汇总：
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 7 | 汇总成果记录 | 新建 `docs/` 下一份：单因子 + 合成 + ML 两轮 + 待办，作为唯一权威口径 |
+| 8 | ML 第 2 轮补分析 | 2026-09-03 的 61 vs 109 特征（+48 会计）只有 `output/ml/compare.out` 原始数字，无解读 |
+| 9 | ML 第 2 轮补跑 PLS / ENet | 第 1 轮冠军（夏普 2.33 / 2.04）没进第 2 轮，不知道加会计特征后如何 |
+| 10 | 查 LGBM 夏普变化原因 | 第 1 轮（08-20）1.47 → 第 2 轮（09-03）61 特征 1.83，记录里没写配置差异 |
+| 11 | `ml_vs_ic_analysis.md` 遗留三项 | ① `--full` 复核树模型（第 1 轮是 `--fast`）② PLS/ENet 各做置零法重要性与张成检验（当时默认取了 LGBM/OLS-H）③ G1/G10 小盘股真实容量 |
+| 12 | `reports/` 过时 | `A股量化因子回测报告.html`（06-30）、`…研究报告.pptx`（04-24）早于 Choice 迁移，更新或标作废 |
+| 13 | 顶层 `MyProjects/CLAUDE.md` 数字过时 | 写的 v3 夏普 1.55（截至 2026-04，迁移前）；本文件是 1.35（2007~2026-07） |
+
+### 2026-09-29 遗留
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 14 | `turnover_20_ff(_neutral)` 开关 | 已在 `FACTOR_FLAGS` 开启；替换无增益（ICIR -0.659 vs -0.669），决定留作对照还是关闭。核验见 `Database/docs/【核验】聚源自由流通换手率.md` |
+| 15 | `MIN_ROLLING_VALID_DAYS` 实际不生效 | `_calc_turnover_20_raw` 的 `rolling(20).mean()` 默认 `min_periods=20`，窗口内一天 NaN 即整窗 NaN，门槛 10 形同虚设。改了会影响所有换手因子 |
+| 16 | 毛利率研究续 | 初测 ICIR 0.07（中性化）。待做：分时段 IC、Δ毛利率、毛利率稳定性、作 ML 特征。脚本 `scripts/test_gross_margin.py` |
+| 17 | `scripts/` 两个检验脚本未提交 | `test_gross_margin.py`、`compare_turnover_ff.py`，定稿后决定是否入库 |
+
 ✅ `data/stock/A/` 现已是 **100% Choice**（29/29 字段），Datayes 彻底退出。
 
 ## 排错备忘
