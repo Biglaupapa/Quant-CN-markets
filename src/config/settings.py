@@ -145,6 +145,37 @@ DB_START   = "2005-01-04"   # Database 数据起始
 # -----------------------------------------------------------------------------
 IPO_FILTER_DAYS          = 60    # 新股过滤：上市不足 N 个交易日的股票排除
 MIN_ROLLING_VALID_DAYS   = 10    # 滚动窗口内最少有效交易日（用于因子计算）
+# ↑ 以上两项只用于**逐日**清洗掩码 build_investable_mask(freq="D")（因子计算输入）。
+#   组建日（t 月末）的股票池由下面的 FORMATION_CONFIG 决定（2026-10-01 起与文献对齐）。
+
+# -----------------------------------------------------------------------------
+# 组建日股票池（t 月末）—— 与 LSY 2019 / HQZ / 顾明等对齐，见 docs/【方法】回测口径与文献对齐.md
+# -----------------------------------------------------------------------------
+# 规则 → 依据：
+#   sample              a  样本：lsy = 60/00/30；lsy_star = + 科创板 688/689；all = + 北交所     LSY
+#   trading_on_formation b  t 月最后交易日有成交（status=1）                                       HQZ
+#   min_trade_days_month c  t 月成交天数 ≥ 15                                                       LSY
+#   min_trade_days_12m   c  过去 12 个月成交天数 ≥ 120                                              LSY
+#   min_listed_months    d  上市满 N 个月（日历，list_date + N 月 ≤ t）                              LSY、HQZ
+#   exclude_st           e  t 月最后交易日 ST / *ST 剔除                                            顾明等
+#   exclude_delist_period f t 月末处于待退市（退市整理期）剔除                                      顾明等
+#   exclude_bottom_pct   g  t 月末 A 股市值（收盘 × A 股总股本，含非流通股）最小 30% 剔除            LSY、HQZ
+#                           排序范围：所选样本内当月有市值的全部股票
+FORMATION_CONFIG = {
+    "sample":                "lsy",
+    "trading_on_formation":  True,
+    "min_trade_days_month":  15,
+    "min_trade_days_12m":    120,
+    "min_listed_months":     6,
+    "exclude_st":            True,
+    "exclude_delist_period": True,
+    "exclude_bottom_pct":    0.30,
+}
+
+# 组建日股票池所需的 Database 侧数据
+STOCKS_LIST_PATH    = Path("/Users/louis/MyProjects/Database/data/stocks_list/A.csv")          # 证券主表（list_date）
+DELIST_PERIOD_PATH  = Path("/Users/louis/MyProjects/Database/data/stock/A_monthly/delist_period.csv")   # 待退市月末名单（Choice sector 001026）
+TOTAL_ASHARE_PATH   = Path("/Users/louis/MyProjects/Database/data/vendor/caihui/total_ashare_caihui.csv")  # A 股总股本月末（财汇）
 
 # -----------------------------------------------------------------------------
 # 因子计算参数

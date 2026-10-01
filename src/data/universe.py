@@ -21,11 +21,122 @@ import numpy as np
 from typing import Optional
 
 from src.data.loader import load_data, load_data_hk, to_monthly
-from src.config.settings import IPO_FILTER_DAYS, PENNY_STOCK_PRICE_MIN
+from src.config.settings import (IPO_FILTER_DAYS, PENNY_STOCK_PRICE_MIN, FORMATION_CONFIG,
+                                 STOCKS_LIST_PATH, DELIST_PERIOD_PATH, TOTAL_ASHARE_PATH)
 
 
 # -----------------------------------------------------------------------------
-# 核心：生成可投资掩码
+# 组建日（t 月末）股票池 —— 2026-10-01 起与文献对齐
+# -----------------------------------------------------------------------------
+#
+# 与 build_investable_mask 的分工：
+#   build_investable_mask(freq="D")  逐日清洗掩码，只用于**因子计算输入**（不变）
+#   build_formation_mask()           t 月末组建股票池，决定**谁能入组**（engine.calc_monthly_returns 用）
+#
+# 规则、依据与实测见 docs/【方法】回测口径与文献对齐.md；参数见 settings.FORMATION_CONFIG。
+
+def _month_end_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """取每月**最后一个交易日**那一行（不是「当月最后非空值」），索引换成日历月末。"""
+    idx = df.index
+    last = pd.Series(idx, index=idx).groupby(idx.to_period("M")).max()
+    out = df.loc[last.values]
+    out.index = pd.DatetimeIndex(last.values) + pd.offsets.MonthEnd(0)
+    return out
+
+
+def _in_sample(codes: pd.Index, sample: str) -> pd.Series:
+    """a：样本范围。lsy = 60/00/30；lsy_star = + 688/689；all = 全部（含北交所）。"""
+    is_bj = codes.str.endswith(".BJ")
+    is_star = codes.str[:3].isin(["688", "689"])
+    if sample == "all":
+        keep = np.ones(len(codes), dtype=bool)
+    elif sample == "lsy_star":
+        keep = ~is_bj
+    elif sample == "lsy":
+        keep = ~is_bj & ~is_star & codes.str[:2].isin(["60", "00", "30"])
+    else:
+        raise ValueError(f"[universe] 未知 sample={sample!r}（lsy / lsy_star / all）")
+    return pd.Series(keep, index=codes)
+
+
+def build_formation_mask(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    config: Optional[dict] = None,
+) -> pd.DataFrame:
+    """
+    t 月末组建股票池（布尔，index = 日历月末，columns = 股票代码）。只用 t 月及以前信息。
+
+    config 覆盖 settings.FORMATION_CONFIG 的任意键；值为 None / False 即关闭该规则。
+    额外键 `min_listed_days`（默认不启用）：旧规则「listed_days ≥ N 交易日」，仅供新旧对比。
+    """
+    cfg = {**FORMATION_CONFIG, **(config or {})}
+    # 往前多取 13 个月，供「过去 12 个月成交天数」使用
+    load_start = (pd.Timestamp(start) - pd.DateOffset(months=13)).strftime("%Y-%m-%d") if start else None
+    fields = ["trade_status", "is_st", "close"] + (["listing_days"] if cfg.get("min_listed_days") else [])
+    d = load_data(fields, start=load_start, end=end)
+    num = lambda x: pd.to_numeric(x.stack(), errors="coerce").unstack()
+    status = num(d["trade_status"])
+    cols = status.columns
+    traded = (status == 1)
+
+    st_me = _month_end_rows(status)
+    mask = pd.DataFrame(True, index=st_me.index, columns=cols)
+
+    # b：t 月最后交易日有成交
+    if cfg.get("trading_on_formation"):
+        mask &= (st_me == 1)
+    # c：交易记录天数（当月 / 过去 12 个月）
+    days_m = traded.resample("ME").sum().reindex(index=mask.index, columns=cols)
+    if cfg.get("min_trade_days_month"):
+        mask &= days_m >= cfg["min_trade_days_month"]
+    if cfg.get("min_trade_days_12m"):
+        days_12 = days_m.rolling(12, min_periods=1).sum()
+        mask &= days_12 >= cfg["min_trade_days_12m"]
+    # d：上市满 N 个月（日历）
+    if cfg.get("min_listed_months"):
+        sl = pd.read_csv(STOCKS_LIST_PATH, dtype=str).set_index("code")
+        ld = pd.to_datetime(sl["list_date"].reindex(cols), errors="coerce")
+        ok_from = ld + pd.DateOffset(months=cfg["min_listed_months"])
+        mask &= pd.DataFrame(mask.index.values[:, None] >= ok_from.values[None, :],
+                             index=mask.index, columns=cols)
+    # 旧规则（仅对比用）：listed_days ≥ N
+    if cfg.get("min_listed_days"):
+        ld_me = _month_end_rows(num(d["listing_days"])).reindex(index=mask.index, columns=cols)
+        mask &= ld_me >= cfg["min_listed_days"]
+    # e：t 月最后交易日 ST / *ST
+    if cfg.get("exclude_st"):
+        mask &= ~(_month_end_rows(num(d["is_st"])).reindex(index=mask.index, columns=cols) == 1)
+    # f：待退市（退市整理期）
+    if cfg.get("exclude_delist_period"):
+        dp = pd.read_csv(DELIST_PERIOD_PATH, dtype=str)
+        dp["me"] = pd.to_datetime(dp["month_end"]) + pd.offsets.MonthEnd(0)
+        hit = pd.crosstab(dp["me"], dp["code"]).astype(bool).reindex(index=mask.index, columns=cols,
+                                                                     fill_value=False)
+        mask &= ~hit
+    # a：样本范围
+    if cfg.get("sample"):
+        mask &= _in_sample(cols, cfg["sample"]).values[None, :]
+    # g：A 股市值最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
+    if cfg.get("exclude_bottom_pct"):
+        ta = pd.read_csv(TOTAL_ASHARE_PATH, index_col=0)
+        ta.index = pd.to_datetime(ta.index) + pd.offsets.MonthEnd(0)
+        close_me = _month_end_rows(num(d["close"])).reindex(index=mask.index, columns=cols)
+        cap = close_me * ta.reindex(index=mask.index, columns=cols)
+        if cfg.get("sample"):
+            keep = _in_sample(cols, cfg["sample"]).values
+            cap = cap.loc[:, keep]                       # 排序范围限定在样本内
+        small = (cap.rank(axis=1, pct=True) <= cfg["exclude_bottom_pct"]).reindex(columns=cols, fill_value=False)
+        mask &= ~small
+
+    mask = mask.fillna(False).astype(bool)
+    if start:
+        mask = mask.loc[pd.Timestamp(start):]
+    return mask
+
+
+# -----------------------------------------------------------------------------
+# 核心：生成可投资掩码（逐日清洗，用于因子计算输入）
 # -----------------------------------------------------------------------------
 
 def build_investable_mask(

@@ -18,13 +18,14 @@ import numpy as np
 from typing import Optional
 
 from src.data.loader import load_data, load_data_hk
-from src.data.universe import build_investable_mask, build_investable_mask_hk
+from src.data.universe import build_formation_mask, build_investable_mask_hk
 
 
 def calc_monthly_returns(
     start: Optional[str] = None,
     end: Optional[str] = None,
     market: str = "A",
+    formation_config: Optional[dict] = None,
 ) -> pd.DataFrame:
     """
     月度持有收益率矩阵（收盘到收盘，持有期不筛选）。
@@ -35,7 +36,8 @@ def calc_monthly_returns(
 
     两层，各管一件事：
 
-    1. **组建（t 月末）**：t 月末不在投资域的股票，其 t+1 月收益置 NaN。只用 t 月末信息，
+    1. **组建（t 月末）**：t 月末不在组建日股票池（universe.build_formation_mask）的股票，
+       其 t+1 月收益置 NaN。只用 t 月末信息，
        在这里落实是因为所有下游（单因子 IC、分组、合成、ML 基准）都用这张矩阵——一处生效。
        （因子侧按日计算后取「当月最后有效值」，月末当天停牌 / ST 的股票仍带因子值，
        2026-10-01 实测占各因子 1%~3%；不能依赖因子侧自己剔除。）
@@ -51,9 +53,15 @@ def calc_monthly_returns(
     ----------
     market : str
         "A"（默认，A股）或 "HK"（港股）
+    formation_config : dict, optional
+        覆盖 settings.FORMATION_CONFIG（仅 A 股），用于逐条规则对比
     """
-    loader, mask_fn = ((load_data_hk, build_investable_mask_hk) if market == "HK"
-                       else (load_data, build_investable_mask))
+    if market == "HK":
+        loader = load_data_hk
+        mask_fn = lambda start, end: build_investable_mask_hk(start=start, end=end, freq="M")
+    else:
+        loader = load_data
+        mask_fn = lambda start, end: build_formation_mask(start=start, end=end, config=formation_config)
     close = loader(["close_adj"], start=start, end=end).get("close_adj")
     if close is None:
         raise ValueError(f"[engine] 缺少 close_adj 数据（market={market}）")
@@ -63,7 +71,7 @@ def calc_monthly_returns(
     ret = close_me / close_me.shift(1) - 1
 
     # 组建：t 月末可投资 → 才有 t+1 月收益（shift(1) 把 t 月末的判断对齐到 t+1 行）
-    formed = mask_fn(start=start, end=end, freq="M").shift(1)
+    formed = mask_fn(start, end).shift(1)
     formed = formed.reindex(index=ret.index, columns=ret.columns).fillna(False).astype(bool)
     return ret.where(formed)
 
