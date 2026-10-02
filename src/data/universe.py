@@ -22,7 +22,7 @@ from typing import Optional
 
 from src.data.loader import load_data, load_data_hk, to_monthly
 from src.config.settings import (IPO_FILTER_DAYS, PENNY_STOCK_PRICE_MIN, FORMATION_CONFIG,
-                                 STOCKS_LIST_PATH, DELIST_PERIOD_PATH, TOTAL_ASHARE_PATH)
+                                 STOCKS_LIST_PATH, DELIST_PERIOD_PATH)
 
 
 # -----------------------------------------------------------------------------
@@ -73,7 +73,8 @@ def build_formation_mask(
     cfg = {**FORMATION_CONFIG, **(config or {})}
     # 往前多取 13 个月，供「过去 12 个月成交天数」使用
     load_start = (pd.Timestamp(start) - pd.DateOffset(months=13)).strftime("%Y-%m-%d") if start else None
-    fields = ["trade_status", "is_st", "close"] + (["listing_days"] if cfg.get("min_listed_days") else [])
+    fields = (["trade_status", "is_st"] + (["market_value"] if cfg.get("exclude_bottom_size") else [])
+              + (["listing_days"] if cfg.get("min_listed_days") else []))
     d = load_data(fields, start=load_start, end=end)
     num = lambda x: pd.to_numeric(x.stack(), errors="coerce").unstack()
     status = num(d["trade_status"])
@@ -117,16 +118,13 @@ def build_formation_mask(
     # a：样本范围
     if cfg.get("sample"):
         mask &= _in_sample(cols, cfg["sample"]).values[None, :]
-    # g：A 股市值最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
-    if cfg.get("exclude_bottom_pct"):
-        ta = pd.read_csv(TOTAL_ASHARE_PATH, index_col=0)
-        ta.index = pd.to_datetime(ta.index) + pd.offsets.MonthEnd(0)
-        close_me = _month_end_rows(num(d["close"])).reindex(index=mask.index, columns=cols)
-        cap = close_me * ta.reindex(index=mask.index, columns=cols)
+    # g：总市值（Choice MV）最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
+    if cfg.get("exclude_bottom_size"):
+        cap = _month_end_rows(num(d["market_value"])).reindex(index=mask.index, columns=cols)
         if cfg.get("sample"):
             keep = _in_sample(cols, cfg["sample"]).values
             cap = cap.loc[:, keep]                       # 排序范围限定在样本内
-        small = (cap.rank(axis=1, pct=True) <= cfg["exclude_bottom_pct"]).reindex(columns=cols, fill_value=False)
+        small = (cap.rank(axis=1, pct=True) <= cfg["bottom_size_pct"]).reindex(columns=cols, fill_value=False)
         mask &= ~small
 
     mask = mask.fillna(False).astype(bool)

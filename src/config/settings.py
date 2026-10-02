@@ -159,8 +159,14 @@ MIN_ROLLING_VALID_DAYS   = 10    # 滚动窗口内最少有效交易日（用于
 #   min_listed_months    d  上市满 N 个月（日历，list_date + N 月 ≤ t）                              LSY、HQZ
 #   exclude_st           e  t 月最后交易日 ST / *ST 剔除                                            顾明等
 #   exclude_delist_period f t 月末处于待退市（退市整理期）剔除                                      顾明等
-#   exclude_bottom_pct   g  t 月末 A 股市值（收盘 × A 股总股本，含非流通股）最小 30% 剔除            LSY、HQZ
+#   exclude_bottom_size  g  t 月末总市值最小 bottom_size_pct 剔除（布尔开关）                      LSY、HQZ
+#   bottom_size_pct         剔除比例，默认 0.30
+#                           市值 = market_value（Choice MV，总市值）。LSY 用 A 股市值（含限售股），
+#                           但财汇、聚源均无可用的直接字段（聚源估值表仅 2024-03 起），按「同一指标
+#                           单一来源、直接字段优先」统一用 Choice MV（2026-10-02 Louis 决定）
 #                           排序范围：所选样本内当月有市值的全部股票
+#                           ★ 主框架默认关闭：被剔除的小市值股票的收益同样重要（2026-10-02 Louis 决定）；
+#                             LSY 复现、CH-3/CH-4 构建时显式打开
 FORMATION_CONFIG = {
     "sample":                "lsy",
     "trading_on_formation":  True,
@@ -169,13 +175,13 @@ FORMATION_CONFIG = {
     "min_listed_months":     6,
     "exclude_st":            True,
     "exclude_delist_period": True,
-    "exclude_bottom_pct":    0.30,
+    "exclude_bottom_size":   False,
+    "bottom_size_pct":       0.30,
 }
 
 # 组建日股票池所需的 Database 侧数据
 STOCKS_LIST_PATH    = Path("/Users/louis/MyProjects/Database/data/stocks_list/A.csv")          # 证券主表（list_date）
 DELIST_PERIOD_PATH  = Path("/Users/louis/MyProjects/Database/data/stock/A_monthly/delist_period.csv")   # 待退市月末名单（Choice sector 001026）
-TOTAL_ASHARE_PATH   = Path("/Users/louis/MyProjects/Database/data/vendor/caihui/total_ashare_caihui.csv")  # A 股总股本月末（财汇）
 
 # -----------------------------------------------------------------------------
 # 因子计算参数
