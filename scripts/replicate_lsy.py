@@ -4,8 +4,7 @@
 
 方法（按 LSY 原文；与原文的差异在 docs/【方法】回测口径与文献对齐.md §十一 列明）：
 - 股票池：settings.FORMATION_CONFIG 全套，并显式打开 g（剔总市值最小 30%；主框架默认关闭）
-- 市值：t 月末 market_value（Choice MV，总市值），用于加权与 size。LSY 用 A 股市值（含限售股），
-        财汇、聚源均无可用的直接字段，按「同一指标单一来源」统一用 Choice MV（2026-10-02）
+- 市值：t 月末 a_market_value（财汇 TOTMKTCAP，A 股市值含限售股，与 LSY 一致），用于加权与 size
 - 换手：turn（框架权威来源，VOLUME / LIQSHARE）。LSY 分母为总股本，口径差异见方法文档 §十一
 - CH-3：剩余股票按市值中位数分 S/B，按 EP 分 30/40/30（V/M/G），6 个市值加权组合；
         SMB = (S/V+S/M+S/G)/3 − (B/V+B/M+B/G)/3；VMG = (S/V+B/V)/2 − (S/G+B/G)/2；
@@ -28,13 +27,13 @@ LSY_T6 = {"size（小−大）": 1.09, "EP（高−低）": 1.27, "BM（高−�
           "1月反转（低−高）": 1.47, "12月换手（低−高）": 0.33, "异常换手（低−高）": 1.14}
 
 num = lambda x: pd.to_numeric(x.stack(), errors="coerce").unstack()
-d = load_data(["market_value", "close_adj", "pe_ttm", "pb", "turn"], start="2005-01-01", end=E)
+d = load_data(["a_market_value", "close_adj", "pe_ttm", "pb", "turn"], start="2005-01-01", end=E)
 LSY_CFG = {"exclude_bottom_size": True}                        # LSY：剔市值最小 30%
 mask = build_formation_mask(S, E, config=LSY_CFG)              # t 月末组建股票池
 cols = mask.columns
 ret_next = calc_monthly_returns(S, E, formation_config=LSY_CFG).shift(-1).reindex(index=mask.index, columns=cols)   # t → t+1
 
-cap = _month_end_rows(num(d["market_value"])).reindex(index=mask.index, columns=cols).where(mask)
+cap = _month_end_rows(num(d["a_market_value"])).reindex(index=mask.index, columns=cols).where(mask)
 
 # 信号（t 月末可得）
 pe = _month_end_rows(num(d["pe_ttm"])).reindex(index=mask.index, columns=cols)

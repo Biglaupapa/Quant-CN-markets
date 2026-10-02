@@ -73,7 +73,7 @@ def build_formation_mask(
     cfg = {**FORMATION_CONFIG, **(config or {})}
     # 往前多取 13 个月，供「过去 12 个月成交天数」使用
     load_start = (pd.Timestamp(start) - pd.DateOffset(months=13)).strftime("%Y-%m-%d") if start else None
-    fields = (["trade_status", "is_st"] + (["market_value"] if cfg.get("exclude_bottom_size") else [])
+    fields = (["trade_status", "is_st"] + (["a_market_value"] if cfg.get("exclude_bottom_size") else [])
               + (["listing_days"] if cfg.get("min_listed_days") else []))
     d = load_data(fields, start=load_start, end=end)
     num = lambda x: pd.to_numeric(x.stack(), errors="coerce").unstack()
@@ -118,9 +118,9 @@ def build_formation_mask(
     # a：样本范围
     if cfg.get("sample"):
         mask &= _in_sample(cols, cfg["sample"]).values[None, :]
-    # g：总市值（Choice MV）最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
+    # g：A 股市值（财汇 TOTMKTCAP，含限售股）最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
     if cfg.get("exclude_bottom_size"):
-        cap = _month_end_rows(num(d["market_value"])).reindex(index=mask.index, columns=cols)
+        cap = _month_end_rows(num(d["a_market_value"])).reindex(index=mask.index, columns=cols)
         if cfg.get("sample"):
             keep = _in_sample(cols, cfg["sample"]).values
             cap = cap.loc[:, keep]                       # 排序范围限定在样本内

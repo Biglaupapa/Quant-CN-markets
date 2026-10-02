@@ -311,12 +311,14 @@ def calc_close_vwap_dev(start=None, end=None) -> pd.DataFrame:
     低于均价 → 尾盘抛压。是**日内资金流向**的直接代理，
     比隔夜收益（overnight_ret）更贴近真实交易行为。
 
-    用不复权口径：close 与 vwap 必须同口径，且比值本身已消去复权因子。
+    用后复权口径：close_adj 与 vwap_adj 同口径，比值消去复权因子，与不复权比值相同。
+    2026-10-02 由不复权 close / vwap（均为派生，第③级）改为 close_adj / vwap_adj
+    （Choice CLOSE / AVERAGE 直接字段，第①级），见 Database/docs/【登记】指标权威来源.md。
     """
-    d = load_data(["close", "vwap"], start=start, end=end)
-    close, vwap = d.get("close"), d.get("vwap")
+    d = load_data(["close_adj", "vwap_adj"], start=start, end=end)
+    close, vwap = d.get("close_adj"), d.get("vwap_adj")
     if close is None or vwap is None:
-        log.warning("[close_vwap_dev] 缺少 close 或 vwap 数据")
+        log.warning("[close_vwap_dev] 缺少 close_adj 或 vwap_adj 数据")
         return pd.DataFrame()
 
     mask = build_investable_mask(start=start, end=end, freq="D")
@@ -378,22 +380,24 @@ def calc_high_low_range(start=None, end=None) -> pd.DataFrame:
 #
 # 注：这里**只用原始下载字段**，不做估值反推。
 # `chcsho_12m`（总股本变动）需由 MV/close 反推总股本，属反推法，故不做。
-# `free_float_shares` 是 Choice 原始字段（LIQSHARE），其变化率合法。
+# `float_shares` 是 Choice 原始字段（LIQSHARE），其变化率合法。
 # =============================================================================
 
 def calc_free_float_ratio(start=None, end=None) -> pd.DataFrame:
     """
-    ★ 自由流通占比：流通市值 / 总市值
+    ★ 流通占比：流通股本 / 总股本（因子名沿用 free_float_ratio，实为流通股本口径）
 
     **A 股特色特征**，在美股几乎无意义（美股基本全流通），
     但 A 股存在大量限售股、国有股，流通比例差异极大。
-    比例低 → 筹码集中、易被操纵、流动性差。两个字段都是 Choice 原始值
-    （neg_market_value 与 market_value），无反推。
+    比例低 → 筹码集中、易被操纵、流动性差。
+    2026-10-02 由 neg_market_value / market_value 改为 float_shares / total_shares：
+    两个都是 Choice 直接字段（LIQSHARE / TOTALSHARE），同源同生效日；流通市值换成财汇后，
+    旧式会变成分子财汇、分母 Choice，股本生效日错位。见 Database/docs/【登记】指标权威来源.md。
     """
-    d = load_data(["neg_market_value", "market_value"], start=start, end=end)
-    neg, tot = d.get("neg_market_value"), d.get("market_value")
+    d = load_data(["float_shares", "total_shares"], start=start, end=end)
+    neg, tot = d.get("float_shares"), d.get("total_shares")
     if neg is None or tot is None:
-        log.warning("[free_float_ratio] 缺少 neg_market_value 或 market_value")
+        log.warning("[free_float_ratio] 缺少 float_shares 或 total_shares")
         return pd.DataFrame()
 
     mask = build_investable_mask(start=start, end=end, freq="D")
@@ -405,11 +409,11 @@ def calc_free_float_ratio(start=None, end=None) -> pd.DataFrame:
 
 def calc_float_shares_chg(start=None, end=None) -> pd.DataFrame:
     """
-    ★ 流通股本 12 月变化率：free_float_shares_t / free_float_shares_{t-12} − 1
+    ★ 流通股本 12 月变化率：float_shares_t / float_shares_{t-12} − 1
 
     捕捉**限售股解禁**压力。A 股的解禁是可预期的供给冲击，
     解禁量大 → 抛压大 → 后续收益低（预期负向）。
-    `free_float_shares` 是 Choice 原始字段 LIQSHARE，非反推。
+    `float_shares` 是 Choice 原始字段 LIQSHARE，非反推。
     """
     ffs = load_data(["float_shares"], start=start, end=end).get("float_shares")
     if ffs is None:

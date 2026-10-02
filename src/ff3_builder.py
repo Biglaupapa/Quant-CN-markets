@@ -77,7 +77,8 @@ def load_data(sh_sz_codes: set) -> dict:
 
     data = {
         "close_adj": _read_wide("close_adj.csv",       sh_sz_codes),
-        "neg_mv":    _read_wide("neg_market_value.csv", sh_sz_codes),
+        # 流通市值：2026-10-02 起财汇 NEGOTIABLEMV（权威来源，见 Database/docs/【登记】指标权威来源.md）
+        "neg_mv":    _read_wide("../../vendor/caihui/wide/neg_market_value_caihui.csv", sh_sz_codes),
         "pb":        _read_wide("pb.csv",               sh_sz_codes),
         "status":    _read_wide("status.csv",           sh_sz_codes),
         "st":        _read_wide("st.csv",               sh_sz_codes),

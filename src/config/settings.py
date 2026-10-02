@@ -79,11 +79,13 @@ ARCHIVE_FIELD_MAP = {
 # Database CSV 格式：index=日期, columns=股票代码（标准格式）
 # -----------------------------------------------------------------------------
 DATABASE_FIELD_MAP = {
-    # 价格（不复权）
-    "close":           "close.csv",
-    "open":            "open.csv",
-    "high":            "high.csv",
-    "low":             "low.csv",
+    # 价格（不复权）—— 2026-10-02 起权威来源为财汇 tq_qt_skdailyprice 直接字段（第②级），
+    # 替代 Choice 派生（MV/TOTALSHARE，第③级）。全时段单一来源、不拼接；财汇缺格保持 NaN。
+    # 见 Database/docs/【登记】指标权威来源.md。生成：python3 src/vendor_caihui_quote.py
+    "close":           "../../vendor/caihui/wide/close_caihui.csv",
+    "open":            "../../vendor/caihui/wide/open_caihui.csv",
+    "high":            "../../vendor/caihui/wide/high_caihui.csv",
+    "low":             "../../vendor/caihui/wide/low_caihui.csv",
     "high_adj":        "high_adj.csv",
     "low_adj":         "low_adj.csv",
     # 后复权价格（原为存档专属，现已补入 Database）
@@ -117,15 +119,19 @@ DATABASE_FIELD_MAP = {
     "ev_ebitda":        "ev_ebitda.csv",        # 企业倍数 EV2/EBITDA
     "est_pe_ftm":       "est_pe_ftm.csv",       # 预测市盈率（未来12月），覆盖约 51%
     "est_peg":          "est_peg.csv",          # 预测 PEG，覆盖约 51%
-    # 市值
-    "market_value":     "market_value.csv",     # 总市值（元）→ Size 因子
-    "neg_market_value": "neg_market_value.csv", # 流通市值（元）→ Size2 因子
+    # 市值（三个相似但不同的指标，用途见登记表）
+    "market_value":     "market_value.csv",     # 总市值（含 H/B 股，按 A 股价；Choice MV）→ size、市值分母因子
+    # 流通市值：2026-10-02 起财汇 tq_sk_finindic.NEGOTIABLEMV（第②级），替代 Choice 派生 D3
+    "neg_market_value": "../../vendor/caihui/wide/neg_market_value_caihui.csv",  # → 中性化、size2、FF3
+    # A 股市值（含限售股）：财汇 tq_sk_finindic.TOTMKTCAP（第②级）→ 规则 g、LSY 复现、CH-3/CH-4
+    "a_market_value":   "../../vendor/caihui/wide/a_market_value_caihui.csv",
     # 股票池过滤（原为存档专属，现已补入 Database）
     # Database 中字段名与存档不同，此处统一映射
     "is_st":            "st.csv",               # 1=ST，0=正常
     "trade_status":     "status.csv",           # 1=正常交易，0=停牌（与存档字符串格式不同）
     "listing_days":     "listed_days.csv",      # 上市至今交易日数
-    "float_shares":     "free_float_shares.csv", # 流通股本（股）
+    "float_shares":     "float_shares.csv",     # 流通股本（Choice LIQSHARE；2026-10-02 由 free_float_shares 改名）
+    "total_shares":     "total_shares.csv",     # 总股本（含 H/B 股，Choice TOTALSHARE；2026-10-02 新增）
 }
 
 # -----------------------------------------------------------------------------
@@ -159,11 +165,10 @@ MIN_ROLLING_VALID_DAYS   = 10    # 滚动窗口内最少有效交易日（用于
 #   min_listed_months    d  上市满 N 个月（日历，list_date + N 月 ≤ t）                              LSY、HQZ
 #   exclude_st           e  t 月最后交易日 ST / *ST 剔除                                            顾明等
 #   exclude_delist_period f t 月末处于待退市（退市整理期）剔除                                      顾明等
-#   exclude_bottom_size  g  t 月末总市值最小 bottom_size_pct 剔除（布尔开关）                      LSY、HQZ
+#   exclude_bottom_size  g  t 月末 A 股市值最小 bottom_size_pct 剔除（布尔开关）                   LSY、HQZ
 #   bottom_size_pct         剔除比例，默认 0.30
-#                           市值 = market_value（Choice MV，总市值）。LSY 用 A 股市值（含限售股），
-#                           但财汇、聚源均无可用的直接字段（聚源估值表仅 2024-03 起），按「同一指标
-#                           单一来源、直接字段优先」统一用 Choice MV（2026-10-02 Louis 决定）
+#                           市值 = a_market_value（财汇 tq_sk_finindic.TOTMKTCAP，A 股市值含限售股，
+#                           与 LSY 口径一致；2026-10-02 Louis 决定）
 #                           排序范围：所选样本内当月有市值的全部股票
 #                           ★ 主框架默认关闭：被剔除的小市值股票的收益同样重要（2026-10-02 Louis 决定）；
 #                             LSY 复现、CH-3/CH-4 构建时显式打开
