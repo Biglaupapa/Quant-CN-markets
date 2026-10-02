@@ -11,7 +11,8 @@ CH-3 / CH-4 因子构建 —— Liu, Stambaugh, Yuan (2019, JFE) "Size and Value
 - 股票池：组建日规则 a–g（settings.FORMATION_CONFIG）并**打开 g**（剔 A 股市值最小 30%）
 - 市值：t 月末 a_market_value（财汇 TOTMKTCAP，A 股市值含限售股）。原文为「收盘 × 总股本，
   含非流通股」，未写明是否仅 A 股——按 Louis 2026-10-02 决定用 A 股市值，歧义已记录
-- EP：1 / pe_mrq_deducted（财汇 PEMRQNPAAEI：最新报告期年化、扣非，按公告日更新）。
+- EP：1 / pe_ttm_deducted（财汇 PETTMNPAAEI：TTM、扣非）。原文「most recently reported annualized」
+  有歧义；20 组对比中 TTM 扣非与官方 VMG 最接近（相关 0.961，最新报告期年化 0.921），2026-10-02 改用。
   负 EP 保留、参与排序（落入低端 = 成长组），与原文「categorize them as growth stocks」一致
 - 异常换手：过去 20 日平均日换手 ÷ 过去 250 日平均日换手（turn = VOLUME / LIQSHARE；
   原文分母为总股本，比值形式下差异仅来自窗口内股本变动）
@@ -55,10 +56,10 @@ def build(end: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     ret = calc_monthly_returns(START, end, formation_config=LSY_CFG)  # 第 t 行 = t 月收益（组建于 t−1）
     ret_next = ret.shift(-1).reindex(index=mask.index, columns=cols)  # 第 t 行 = t+1 月收益
 
-    d = load_data(["a_market_value", "pe_mrq_deducted", "turn"], start=LOAD_START, end=end)
+    d = load_data(["a_market_value", "pe_ttm_deducted", "turn"], start=LOAD_START, end=end)
     me = lambda x: _month_end_rows(_num(x)).reindex(index=mask.index, columns=cols)
     cap = me(d["a_market_value"]).where(mask)
-    pe = me(d["pe_mrq_deducted"])
+    pe = me(d["pe_ttm_deducted"])
     ep = (1.0 / pe.where(pe != 0)).where(mask & cap.notna())
     tov = _num(d["turn"])
     abn = (tov.rolling(20, min_periods=15).mean() / tov.rolling(250, min_periods=120).mean())

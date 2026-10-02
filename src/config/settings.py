@@ -114,7 +114,9 @@ DATABASE_FIELD_MAP = {
     #    里没有净利润，重建不出该口径（与 PE 秩相关仅 0.20~0.43），故于 2026-08-17
     #    改用 PE 顶替并沿用旧因子名。这是语义替换，该因子历史值已整体改变。
     "pe1":              "pe.csv",               # Choice PE（静态市盈率）
-    # 市盈率（最新报告期年化、扣非；财汇 PEMRQNPAAEI，按公告日更新）→ ep_lsy、CH-3 VMG（2026-10-02）
+    # 市盈率（TTM、扣非；财汇 PETTMNPAAEI）→ ep_lsy、CH-3/CH-4 VMG（2026-10-02，替代最新报告期年化口径）
+    "pe_ttm_deducted":  "../../vendor/caihui/wide/pe_ttm_deducted_caihui.csv",
+    # 市盈率（最新报告期年化、扣非；财汇 PEMRQNPAAEI）——仅作对照，不进因子
     "pe_mrq_deducted":  "../../vendor/caihui/wide/pe_mrq_deducted_caihui.csv",
     "pb":               "pb.csv",               # 市净率（Choice PB）
     "dividend_ratio":   "dividend_ratio.csv",   # 股息率（Choice LASTESTDIVIDEND，%）

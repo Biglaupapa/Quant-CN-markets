@@ -477,17 +477,18 @@ def calc_ep(start=None, end=None) -> pd.DataFrame:
 
 def calc_ep_lsy(start=None, end=None) -> pd.DataFrame:
     """
-    LSY（2019）口径的盈利收益率：EP = 1 / 市盈率（最新报告期年化、扣除非经常性损益）。
+    LSY（2019）口径的盈利收益率：EP = 1 / 市盈率（TTM、扣除非经常性损益）。
 
     原文："Earnings equals the most recently reported annualized net profit excluding
     non-recurrent gains/losses"；"We keep negative EP stocks ... and categorize them as
     growth stocks"——**负 EP 保留**（与 `ep` 把亏损置 NaN 不同）。
-    数据：财汇 tq_sk_finindic.PEMRQNPAAEI（按公告日更新，2026-10-02 实测）。
+    数据：财汇 tq_sk_finindic.PETTMNPAAEI。原文「annualized」有歧义：最新报告期年化（PEMRQNPAAEI）
+    与官方 VMG 相关 0.921，TTM 扣非 0.961（20 组对比，2026-10-02），故取 TTM（Louis 同意）。
     与 `ep`（Choice PETTM，TTM、含非经常性损益）是并存的相似指标，见 Database/docs/【登记】指标权威来源.md。
     """
-    pe = load_data(["pe_mrq_deducted"], start=start, end=end).get("pe_mrq_deducted")
+    pe = load_data(["pe_ttm_deducted"], start=start, end=end).get("pe_ttm_deducted")
     if pe is None:
-        log.warning("[ep_lsy] 缺少 pe_mrq_deducted 数据")
+        log.warning("[ep_lsy] 缺少 pe_ttm_deducted 数据")
         return pd.DataFrame()
     mask = build_investable_mask(start=start, end=end, freq="D")
     pe = apply_universe(pe, mask)
