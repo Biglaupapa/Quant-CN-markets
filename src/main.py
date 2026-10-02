@@ -295,6 +295,7 @@ FACTOR_FLAGS = {
     "age":                       True,
     # 估值比率的时序变换（仅变换，无反推）
     "ep":                        True,
+    "ep_lsy":                    True,   # LSY 口径 EP：最新报告期年化扣非（财汇），负值保留
     "sp":                        True,
     "pb_chg_12":                 True,
 }
@@ -431,7 +432,7 @@ def _get_factor_func(factor_name: str):
         "zero_trades_252", "dolvol_126", "turn_std_21",
         "close_vwap_dev", "amihud_vwap", "high_low_range",
         "free_float_ratio", "float_shares_chg", "age",
-        "ep", "sp", "pb_chg_12",
+        "ep", "ep_lsy", "sp", "pb_chg_12",
     ):
         mapping[_name] = getattr(expansion, f"calc_{_name}")
 
