@@ -46,7 +46,7 @@ from src.factors.base import preprocess
 from src.config.settings import (
     NP_YOY_LAG_QUARTERS,
     MIN_ROLLING_VALID_DAYS,
-    INDUSTRY_H5_PATH,
+    INDUSTRY_PATH,
 )
 
 
@@ -354,7 +354,7 @@ def calc_net_profit_yoy(
         yoy,
         neutralize="size+industry",
         log_mktcap=log_mktcap,
-        industry_h5_path=INDUSTRY_H5_PATH,
+        industry_path=INDUSTRY_PATH,
     )
 
 

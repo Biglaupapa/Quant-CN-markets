@@ -60,7 +60,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.config.settings import INDUSTRY_H5_PATH
+from src.config.settings import INDUSTRY_PATH
 from src.data.loader import load_data
 from src.data.universe import build_investable_mask
 from src.factors.base import preprocess
@@ -247,7 +247,7 @@ def _make(name: str):
         logmv = np.log(mv.resample("ME").last().replace(0, np.nan))
         return preprocess(raw, neutralize="size+industry",
                           log_mktcap=logmv.reindex_like(raw),
-                          industry_h5_path=INDUSTRY_H5_PATH)
+                          industry_path=INDUSTRY_PATH)
     calc.__name__ = f"calc_{name}"
     calc.__doc__ = f"{SPECS[name][2]}　[财汇 PIT]"
     return calc
@@ -263,7 +263,7 @@ def _make_mv(name: str):
         logmv = np.log(mv.replace(0, np.nan))
         return preprocess(raw, neutralize="size+industry",
                           log_mktcap=logmv.reindex_like(raw),
-                          industry_h5_path=INDUSTRY_H5_PATH)
+                          industry_path=INDUSTRY_PATH)
     calc.__name__ = f"calc_{name}"
     calc.__doc__ = f"{SPECS_MV[name][1]}　[财汇 PIT × Choice 市值]"
     return calc

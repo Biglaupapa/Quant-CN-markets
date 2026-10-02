@@ -7,7 +7,7 @@
 #
 # 中性化说明（经用户确认）：
 #   - 市值中性化：仅 Turnover 因子使用
-#   - 市值+行业双重中性化：PB、NetProfit_YoY 使用
+#   - 市值+行业双重中性化：会计因子（accounting.py）、NetProfit_YoY 使用；行业 = 聚源申万一级（时点）
 #   - 其他因子：暂不做中性化
 # =============================================================================
 
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional, List
 import warnings
 
-from src.config.settings import INDUSTRY_H5_PATH, MIN_ROLLING_VALID_DAYS
+from src.config.settings import INDUSTRY_PATH, MIN_ROLLING_VALID_DAYS
 
 
 # -----------------------------------------------------------------------------
@@ -164,152 +164,98 @@ def neutralize_by_size(
     return result
 
 
+def _load_industry(industry_path: Path, dates: pd.DatetimeIndex) -> Optional[pd.DataFrame]:
+    """
+    读行业宽表并对齐到因子日期。
+
+    行业宽表：行 = 日历月末，列 = 股票代码，值 = 该月最后交易日生效的申万一级行业代码
+    （聚源「申万行业分类(新)」，时点口径；见 Database/docs/【登记】指标权威来源.md）。
+    因子日期若不是月末，取不晚于该日的最近一个月末（ffill），不前视。
+
+    2026-10-02 替代 Wind h5：h5 一直未生效——环境缺 pytables 打不开；即使打开，
+    其索引为 'YYYYMMDD' 交易日，而旧代码按 'YYYY-MM-DD' 日历月末查找，永远匹配不上。
+    """
+    if not industry_path.exists():
+        warnings.warn(f"[base] 行业文件不存在: {industry_path}")
+        return None
+    ind = pd.read_csv(industry_path, index_col=0)
+    ind.index = pd.to_datetime(ind.index)
+    ind = ind.sort_index()
+    # 只按「行」对齐到不晚于因子日期的最近月末；**不**对单元格做 ffill——
+    # 某月无行业的股票保持 NaN，不能把它以前（甚至退市前）的行业代码沿用下去
+    return ind.reindex(pd.DatetimeIndex(dates), method="ffill")
+
+
+def _industry_dummies(codes: pd.Series) -> pd.DataFrame:
+    """一个截面的行业代码 → 哑变量（无行业的股票全 0）。"""
+    return pd.get_dummies(codes.dropna().astype("int64").astype(str)).reindex(codes.index).fillna(0).astype(float)
+
+
 def neutralize_by_industry(
     factor: pd.DataFrame,
-    industry_h5_path: Path = INDUSTRY_H5_PATH,
+    industry_path: Path = INDUSTRY_PATH,
 ) -> pd.DataFrame:
     """
     行业中性化：截面回归剔除因子与行业虚拟变量的线性相关部分，取残差。
-
-    使用 FactorLoading_Industry_arch.h5 中的行业分类数据。
-    经用户确认：PB 和 NetProfit_YoY 做市值+行业双重中性化。
-
-    Parameters
-    ----------
-    factor : pd.DataFrame
-        因子值，index=日期（月度），columns=股票代码
-    industry_h5_path : Path
-        行业因子 HDF5 文件路径
-
-    Returns
-    -------
-    pd.DataFrame
-        行业中性化后的因子值（残差）
+    行业 = 聚源申万一级（时点），见 _load_industry。
     """
-    if not industry_h5_path.exists():
-        warnings.warn(f"[base] 行业 H5 文件不存在: {industry_h5_path}，跳过行业中性化。")
+    ind = _load_industry(industry_path, factor.index)
+    if ind is None:
+        warnings.warn("[base] 无行业数据，跳过行业中性化。")
         return factor
 
     result = factor.copy() * np.nan
-
-    # ── 优化说明 ──────────────────────────────────────────────────
-    # 原实现把 `store[key]` 放在「日期 × 行业」双重循环内部，
-    # 每个日期都把整个 HDF5 的所有行业表重读一遍——IO 是主要开销。
-    # 现改为循环外一次性载入内存；回归用 lstsq 取代 sklearn。
-    # 数学等价（同为最小二乘），差异仅浮点累加顺序。
-    try:
-        with pd.HDFStore(str(industry_h5_path), mode="r") as store:
-            industry_tables = {k: store[k] for k in store.keys()}
-    except Exception as e:
-        warnings.warn(f"[base] 无法打开行业 H5 文件: {e}")
-        return factor
-
-    if not industry_tables:
-        return result
-
     for date in factor.index:
-        date_str = date.strftime("%Y-%m-%d")
         y = factor.loc[date].dropna()
-
         if len(y) < MIN_ROLLING_VALID_DAYS:
             continue
-
-        # 从内存中收集该日期的行业哑变量
-        industry_dummies = [
-            tbl.loc[date_str].reindex(y.index).fillna(0)
-            for tbl in industry_tables.values()
-            if date_str in tbl.index
-        ]
-        if not industry_dummies:
-            continue
-
-        X = pd.DataFrame(industry_dummies).T          # (n_stocks, n_industries)
-        X = X.reindex(y.index).fillna(0)
-
-        # 去掉全零列（该日期无该行业股票）
+        X = _industry_dummies(ind.loc[date].reindex(y.index))
         X = X.loc[:, X.sum() > 0]
         if X.shape[1] == 0:
             continue
-
-        # sklearn 默认 fit_intercept=True，等价于在设计矩阵中加一列常数
         Xd = np.column_stack([np.ones(len(y)), X.values])
         try:
             beta, *_ = np.linalg.lstsq(Xd, y.values, rcond=None)
             result.loc[date, y.index] = y.values - Xd @ beta
         except Exception:
             continue
-
     return result
 
 
 def neutralize_by_size_and_industry(
     factor: pd.DataFrame,
     log_mktcap: pd.DataFrame,
-    industry_h5_path: Path = INDUSTRY_H5_PATH,
+    industry_path: Path = INDUSTRY_PATH,
 ) -> pd.DataFrame:
     """
     市值 + 行业双重中性化：截面同时对 log(市值) 和行业哑变量做回归，取残差。
-
-    经用户确认：PB 和 NetProfit_YoY 使用此方法。
-
-    Parameters
-    ----------
-    factor : pd.DataFrame
-        因子值，index=日期（月度），columns=股票代码
-    log_mktcap : pd.DataFrame
-        log(流通市值)
-    industry_h5_path : Path
-        行业因子 HDF5 文件路径
-
-    Returns
-    -------
-    pd.DataFrame
-        双重中性化后的因子值（残差）
+    行业 = 聚源申万一级（时点），见 _load_industry。无行业数据的股票行业哑变量全 0
+    （仍参与回归，只由截距与市值解释）。
     """
-    if not industry_h5_path.exists():
-        warnings.warn(f"[base] 行业 H5 文件不存在，退化为仅市值中性化。")
+    ind = _load_industry(industry_path, factor.index)
+    if ind is None:
+        warnings.warn("[base] 无行业数据，退化为仅市值中性化。")
         return neutralize_by_size(factor, log_mktcap)
 
     result = factor.copy() * np.nan
-
     common_idx  = factor.index.intersection(log_mktcap.index)
     common_cols = factor.columns.intersection(log_mktcap.columns)
 
-    # 同 neutralize_by_industry：HDF5 一次性载入内存，避免在双重循环里反复读盘
-    try:
-        with pd.HDFStore(str(industry_h5_path), mode="r") as store:
-            industry_tables = {k: store[k] for k in store.keys()}
-    except Exception as e:
-        warnings.warn(f"[base] 无法打开行业 H5 文件: {e}，退化为仅市值中性化。")
-        return neutralize_by_size(factor, log_mktcap)
-
     for date in common_idx:
-        date_str = date.strftime("%Y-%m-%d")
         y    = factor.loc[date, common_cols]
         size = log_mktcap.loc[date, common_cols]
         mask = y.notna() & size.notna()
-
         if mask.sum() < MIN_ROLLING_VALID_DAYS:
             continue
+        y_s, size_s = y[mask], size[mask]
 
-        y_s    = y[mask]
-        size_s = size[mask]
-
-        # 行业哑变量（从内存取）
-        industry_dummies = [
-            tbl.loc[date_str].reindex(y_s.index).fillna(0)
-            for tbl in industry_tables.values()
-            if date_str in tbl.index
-        ]
-
-        # 构建 X 矩阵：[log_mktcap | industry_dummies]
         X = pd.DataFrame({"log_mktcap": size_s})
-        if industry_dummies:
-            ind_df_cross = pd.DataFrame(industry_dummies).T.reindex(y_s.index).fillna(0)
-            ind_df_cross = ind_df_cross.loc[:, ind_df_cross.sum() > 0]
-            X = pd.concat([X, ind_df_cross], axis=1)
+        D = _industry_dummies(ind.loc[date].reindex(y_s.index))
+        # 保留全部行业哑变量：截距 + 全部哑变量共线时 lstsq 取最小范数解，残差（投影）不变；
+        # 若删掉一个「基准行业」，当月无行业的股票会和该行业并成一组，两组均值都不再为 0
+        D = D.loc[:, D.sum() > 0]
+        X = pd.concat([X, D], axis=1)
 
-        # sklearn 默认 fit_intercept=True → 设计矩阵补一列常数
         Xd = np.column_stack([np.ones(len(y_s)), X.values])
         try:
             beta, *_ = np.linalg.lstsq(Xd, y_s.values, rcond=None)
@@ -331,7 +277,7 @@ def preprocess(
     do_standardize: bool = True,
     neutralize: Optional[str] = None,   # None | "size" | "industry" | "size+industry"
     log_mktcap: Optional[pd.DataFrame] = None,
-    industry_h5_path: Path = INDUSTRY_H5_PATH,
+    industry_path: Path = INDUSTRY_PATH,
 ) -> pd.DataFrame:
     """
     完整因子预处理：去极值 → 中性化 → 标准化（按顺序执行）。
@@ -350,8 +296,8 @@ def preprocess(
         中性化方式，None 表示不做
     log_mktcap : pd.DataFrame, optional
         市值中性化所需的 log(流通市值)
-    industry_h5_path : Path
-        行业中性化 HDF5 路径
+    industry_path : Path
+        行业宽表路径（聚源申万一级，时点）
 
     Returns
     -------
@@ -368,12 +314,12 @@ def preprocess(
         f = neutralize_by_size(f, log_mktcap)
 
     elif neutralize == "industry":
-        f = neutralize_by_industry(f, industry_h5_path)
+        f = neutralize_by_industry(f, industry_path)
 
     elif neutralize == "size+industry":
         if log_mktcap is None:
             raise ValueError("[base] 市值+行业中性化需提供 log_mktcap。")
-        f = neutralize_by_size_and_industry(f, log_mktcap, industry_h5_path)
+        f = neutralize_by_size_and_industry(f, log_mktcap, industry_path)
 
     elif neutralize is not None:
         raise ValueError(f"[base] 不支持的中性化方式: {neutralize}")

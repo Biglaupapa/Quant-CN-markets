@@ -23,8 +23,10 @@ DATABASE_DIR = Path("/Users/louis/MyProjects/Database/data/stock/A")
 # Database：港股日度数据（iFinD，2004-01-02 至今）
 HK_DATABASE_DIR = Path("/Users/louis/MyProjects/Database/data/stock/HK")
 
-# 行业因子载荷（HDF5，用于行业中性化，来自原始框架）
-INDUSTRY_H5_PATH = ARCHIVE_DATA_DIR / "FactorLoading_Industry_arch.h5"
+# 行业（用于行业中性化）：聚源 dz_exgindustry「申万行业分类(新)」月末宽表，时点口径，2005 起全覆盖。
+# 2026-10-02 替代 Wind h5（_archive/raw_data/FactorLoading_Industry_arch.h5：止于 2021-02、
+# 覆盖 76%~97%，且因缺 pytables + 日期格式不匹配从未生效）。生成：jydb_extract.py --what industry_sw
+INDUSTRY_PATH = Path("/Users/louis/MyProjects/Database/data/vendor/jydb/industry_sw_jydb.csv")
 
 # 回测结果根目录（与 factors/、backtest/ 等模块平级）
 # 实际输出按市场分层：
