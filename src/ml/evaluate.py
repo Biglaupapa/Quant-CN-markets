@@ -236,6 +236,37 @@ def importance_drops(model, X: np.ndarray, y: np.ndarray, dates: pd.Index,
     return pd.DataFrame(rows).T
 
 
+def importance_drops_groups(model, X: np.ndarray, y: np.ndarray, dates: pd.Index,
+                            features: Sequence[str], groups: dict) -> pd.DataFrame:
+    """
+    组层面的置零法重要性：把一组特征**同时**置零（= 截面中位数），测 R² 与 IC 的下降。
+
+    用途：特征高度相关时，单特征置零会把整组的重要性记在被模型选中的那一个上（替代效应，
+    2026-10-03 dolvol_126 案例）。整组置零则衡量这一类信息的整体贡献。
+    思路同 López de Prado（2020）的聚类特征重要性；分组采用 GKX（2020）的四大类
+    （第 4 类拆为估值 / 会计两子组），组内相关为组外 2.2~4.3 倍（scripts/feature_clusters.py）。
+    groups : {组名: [特征名]}
+    """
+    from src.ml.models import predict
+
+    y_rank = pd.Series(y).groupby(np.asarray(dates)).rank()
+    y_rank.index = pd.RangeIndex(len(y))
+    dates = pd.Index(np.asarray(dates))
+    p0 = predict(model, X)
+    r0, ic0 = r2_oos(y, p0), _monthly_ic(p0, y_rank, dates)
+    pos = {f: j for j, f in enumerate(features)}
+    rows = {}
+    for g, members in groups.items():
+        jj = [pos[f] for f in members if f in pos]
+        if not jj:
+            continue
+        Xz = X.copy()
+        Xz[:, jj] = 0.0
+        pz = predict(model, Xz)
+        rows[g] = {"r2": r0 - r2_oos(y, pz), "ic": ic0 - _monthly_ic(pz, y_rank, dates), "n": len(jj)}
+    return pd.DataFrame(rows).T
+
+
 def normalize_importance(drops: pd.Series) -> pd.Series:
     """负下降（置零后反而更好）记 0，再归一化到和为 1（GKX：normalized to sum to one）。"""
     d = drops.clip(lower=0)
