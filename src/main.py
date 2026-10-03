@@ -298,6 +298,56 @@ FACTOR_FLAGS = {
     "ep_lsy":                    True,   # LSY 口径 EP：最新报告期年化扣非（财汇），负值保留
     "sp":                        True,
     "pb_chg_12":                 True,
+    # ── ★ 2026-10-03 会计因子（src/factors/accounting.py，48 个，财汇 PIT 报表）──
+    # 对标 JKP 命名；38 个做「市值+行业」中性化（行业 = 聚源申万一级，时点），其余见 SPECS
+    "ni_be":                     True,
+    "niq_at":                    True,
+    "ope_be":                    True,
+    "ebit_sale":                 True,
+    "gp_at":                     True,
+    "netmargin":                 True,
+    "pi_nix":                    True,
+    "oaccruals_at":              True,
+    "taccruals_ni":              True,
+    "ocf_at":                    True,
+    "ocf_debt":                  True,
+    "ocf_ni":                    True,
+    "at_gr1":                    True,
+    "be_gr1a":                   True,
+    "sale_gr1":                  True,
+    "ni_gr1":                    True,
+    "inv_gr1a":                  True,
+    "rec_gr1a":                  True,
+    "cash_gr1a":                 True,
+    "debt_gr1":                  True,
+    "debtlt_gr1a":               True,
+    "tax_gr1a":                  True,
+    "capx_gr1a":                 True,
+    "capx_at":                   True,
+    "lev":                       True,
+    "ca_cl":                     True,
+    "caliq_cl":                  True,
+    "cash_at":                   True,
+    "noa_at":                    True,
+    "sale_at":                   True,
+    "sale_inv":                  True,
+    "sale_rec":                  True,
+    "rd_sale":                   True,
+    "rd_at":                     True,
+    "niq_su":                    True,
+    "saleq_su":                  True,
+    "ni_inc8q":                  True,
+    "f_score":                   True,
+    "qmj_prof":                  True,
+    "capex_abn":                 True,
+    "dsale_dinv":                True,
+    "dsale_drec":                True,
+    "dsale_dsga":                True,
+    "cfp":                       True,
+    "fcf_me":                    True,
+    "debt_me":                   True,
+    "netdebt_me":                True,
+    "rd_me":                     True,
 }
 
 # =============================================================================
@@ -435,6 +485,12 @@ def _get_factor_func(factor_name: str):
         "ep", "ep_lsy", "sp", "pb_chg_12",
     ):
         mapping[_name] = getattr(expansion, f"calc_{_name}")
+
+    # ── 会计因子（accounting.py，财汇 PIT 报表；2026-10-03 接入）──────────
+    from src.factors import accounting
+    clash = set(accounting.ACCOUNTING_FACTORS) & set(mapping)
+    assert not clash, f"会计因子与既有因子重名: {clash}"
+    mapping.update(accounting.ACCOUNTING_FACTORS)
 
     return mapping.get(factor_name)
 
