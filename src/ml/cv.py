@@ -56,8 +56,10 @@ class RollingWindowCV:
         保证各窗口的测试集**首尾相接、不重不漏**，
         拼起来正好是一段连续的样本外区间。
     gap : 各段之间空出的月数（见模块文档的「标签错位」说明）
-    expanding : True = 训练集起点固定不动（扩张窗口），
-        False = 训练集长度固定（滚动窗口，GKX 做法，默认）
+    expanding : True = 训练集起点固定不动（扩展窗口）——**GKX 2020 附录 D 的做法**
+        （"recursively increasing the training sample"，验证集定长前滚）；
+        False = 训练集长度固定（滚动窗口）。构造器默认 False 仅为向后兼容，
+        项目默认值见 run.ML_CONFIG（2026-10-03 起为 True）
     """
 
     def __init__(self,

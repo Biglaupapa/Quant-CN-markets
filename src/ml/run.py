@@ -47,11 +47,14 @@ ML_CONFIG = {
     "features":     None,           # None = 缓存里全部；也可给因子名列表
     "rank_transform": True,         # 截面 rank → [-1,1]（GKX 做法）
 
-    # ── 滚动窗口（GKX 的 60/24/12）───────────────────────────────────────
+    # ── 样本切分（GKX 2020 附录 D 的 hybrid：训练集扩展、验证集定长前滚、每年重训）──
+    # 2026-10-03 改为扩展窗口（Louis 决定，与 GKX 一致）。原文："recursively increasing the training
+    # sample ... We maintain the same size of the validation sample, but roll it forward"。
+    # 长度：GKX 为 18 年 / 12 年 / 1 年（美股 60 年）；A 股样本短，沿用 60 / 24 / 12 个月作为起始长度
     "train_months": 60,
     "val_months":   24,
     "test_months":  12,
-    "expanding":    False,          # True = 训练集起点固定（扩张窗口）
+    "expanding":    True,           # True = 训练集起点固定（扩展窗口，GKX）；False = 定长滚动
 
     # ── 训练 ─────────────────────────────────────────────────────────────
     "loss":         "huber",        # 验证集选超参的损失。**不要改成 mse**，
