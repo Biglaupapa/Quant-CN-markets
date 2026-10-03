@@ -200,6 +200,49 @@ def variable_importance(model, X: pd.DataFrame, y,
     return (s.abs() / tot).sort_values(ascending=False) if tot > 0 else s
 
 
+def _monthly_ic(pred: np.ndarray, y_rank: pd.Series, dates: pd.Index) -> float:
+    """月均截面 Spearman IC；y_rank 为预先按月算好的标签秩。"""
+    pr = pd.Series(pred, index=y_rank.index).groupby(dates).rank()
+    return pr.groupby(dates).corr(y_rank).mean()
+
+
+def importance_drops(model, X: np.ndarray, y: np.ndarray, dates: pd.Index,
+                     features: Sequence[str]) -> pd.DataFrame:
+    """
+    置零法变量重要性的**原始下降量**（未归一化），两种口径：
+
+    - `r2`：置零后面板 R² 的下降。**GKX（2020）§2.9 / §3.3 的口径**，且 GKX 在
+      「each training sample」上计算、再对所有训练样本取平均——调用方应传入训练集
+    - `ic`：置零后月均截面 Spearman IC 的下降。**补充口径，无直接文献依据**：
+      本框架按预测排序做多空，排序能力是策略实际用到的信息；R² 以 0 为基准、对预测整体
+      水平敏感，置零某变量若使预测整体平移，R² 会大降而排序几乎不变（2026-10-03 roll_spread 案例）
+
+    特征已做截面 rank→[-1,1]，置零 = 换成截面中位数。
+    """
+    from src.ml.models import predict
+
+    dates = pd.Index(dates)
+    y_rank = pd.Series(y, index=pd.RangeIndex(len(y))).groupby(dates).rank()
+    y_rank.index = pd.RangeIndex(len(y))
+    dates = pd.Index(np.asarray(dates))
+    p0 = predict(model, X)
+    r0, ic0 = r2_oos(y, p0), _monthly_ic(p0, y_rank, dates)
+    rows = {}
+    for j, f in enumerate(features):
+        Xz = X.copy()
+        Xz[:, j] = 0.0
+        pz = predict(model, Xz)
+        rows[f] = {"r2": r0 - r2_oos(y, pz), "ic": ic0 - _monthly_ic(pz, y_rank, dates)}
+    return pd.DataFrame(rows).T
+
+
+def normalize_importance(drops: pd.Series) -> pd.Series:
+    """负下降（置零后反而更好）记 0，再归一化到和为 1（GKX：normalized to sum to one）。"""
+    d = drops.clip(lower=0)
+    tot = d.sum()
+    return (d / tot).sort_values(ascending=False) if tot > 0 else d
+
+
 # =============================================================================
 # 四、张成检验（spanning regression）
 # =============================================================================

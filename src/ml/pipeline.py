@@ -125,7 +125,8 @@ def run(panel: pd.DataFrame,
         fast: bool = True,
         calibrate: bool = True,
         cooldown: float = 0.0,
-        verbose: bool = True) -> dict:
+        verbose: bool = True,
+        importance_model: Optional[str] = None) -> dict:
     """滚动训练全部模型，返回样本外预测。
 
     Parameters
@@ -147,6 +148,8 @@ def run(panel: pd.DataFrame,
         params  : {模型名: DataFrame}  各窗口选中的超参
         cal     : {模型名: DataFrame}  各窗口的校准系数 a、b（calibrate=True 时）
         timing  : {模型名: 秒}
+        importance : {窗口号: DataFrame[r2, ic]}  importance_model 在**该窗口训练集**上的
+                     置零法原始下降量（GKX 2020：within each training sample，再跨样本平均）
     """
     feats = feature_cols(panel)
     dates = pd.DatetimeIndex(panel.index.get_level_values("date").unique()).sort_values()
@@ -166,11 +169,12 @@ def run(panel: pd.DataFrame,
     timing: dict[str, float] = {s.name: 0.0 for s in specs}
     cal_ab: dict[str, list] = {s.name: [] for s in specs}
     y_parts: list[pd.Series] = []
+    importance: dict[int, pd.DataFrame] = {}
 
     for wi, sp in enumerate(splits, 1):
         assert_no_leakage(sp)                       # 每个窗口都验一次，成本可忽略
 
-        X_tr, y_tr, _ = _slice(panel, sp.train, feats)
+        X_tr, y_tr, ix_tr = _slice(panel, sp.train, feats)
         X_va, y_va, _ = _slice(panel, sp.val, feats)
         X_te, y_te, ix_te = _slice(panel, sp.test, feats)
         if len(X_te) == 0:
@@ -200,6 +204,15 @@ def run(panel: pd.DataFrame,
             dt = time.time() - t0
             timing[spec.name] += dt
 
+            if importance_model and spec.name == importance_model:
+                from src.ml.evaluate import importance_drops
+                t1 = time.time()
+                importance[wi] = importance_drops(
+                    model, X_tr[:, jj], y_tr, ix_tr.get_level_values("date"), cols)
+                if verbose:
+                    log.info("    %-6s 重要性（训练集 %s 行 × %d 特征）%.0fs", spec.name,
+                             f"{len(X_tr):,}", len(cols), time.time() - t1)
+
             preds[spec.name].append(pd.Series(yhat, index=ix_te))
             params[spec.name].append({"窗口": wi,
                                       "测试起": f"{sp.test[0]:%Y-%m}",
@@ -222,6 +235,7 @@ def run(panel: pd.DataFrame,
         "params": {k: pd.DataFrame(v) for k, v in params.items() if v},
         "cal": {k: pd.DataFrame(v) for k, v in cal_ab.items() if v},
         "timing": timing,
+        "importance": importance,
         "features": feats,
         "splits": splits,
     }

@@ -178,7 +178,12 @@ def main(argv=None) -> int:
     print(f"\n[Step 3] 滚动训练（{len(specs)} 个模型，"
           f"{'缩小' if cfg['fast'] else '完整'}网格，{cfg['loss']} 损失）...")
     t0 = time.time()
+    # 变量重要性在训练循环内、对**各窗口训练集**计算（GKX 2020 §3.3），不另行重训
+    _pref = ["LGBM", "GBRT", "RF", "ENet", "PLS", "OLS-H"]
+    imp_model = (next((p for p in _pref if any(sp.name == p for sp in specs)), specs[0].name)
+                 if cfg["run_importance"] else None)
     res = pipeline.run(panel, specs=specs, cv=cv, loss=cfg["loss"],
+                       importance_model=imp_model,
                        fast=cfg["fast"], calibrate=cfg["calibrate"],
                        cooldown=cfg["cooldown"])
     print(f"\n  训练总耗时 {time.time() - t0:.0f}s")
@@ -230,14 +235,21 @@ def main(argv=None) -> int:
             dm.to_csv(OUT_DIR / "dm_matrix.csv")
 
     # ── 7. 变量重要性 ────────────────────────────────────────────────
-    if cfg["run_importance"]:
-        print("\n[Step 7] 变量重要性（置零法，取最后一个窗口重训）...")
+    if cfg["run_importance"] and res.get("importance"):
+        print(f"\n[Step 7] 变量重要性（置零法，{imp_model}，各窗口训练集，跨 "
+              f"{len(res['importance'])} 个窗口平均；GKX 2020 §3.3）...")
         try:
-            imp = _importance_last_window(panel, specs, cv, feats, cfg)
-            print("\n  前 15 名：")
+            imp, diag = _importance_summary(res["importance"])
+            print("\n  前 15 名（%，r2 = GKX 口径；ic = 补充口径，无直接文献依据）：")
             print(imp.head(15).mul(100).round(2).to_string())
+            print("\n  检验：")
+            for k, v in diag.items():
+                print(f"    {k}: {v}")
             if cfg["save_output"]:
                 imp.to_csv(OUT_DIR / "variable_importance.csv")
+                pd.concat(res["importance"], names=["窗口", "特征"]).to_csv(
+                    OUT_DIR / "variable_importance_by_window.csv")
+                pd.Series(diag).to_csv(OUT_DIR / "variable_importance_diag.csv")
         except Exception as e:
             log.warning("  变量重要性失败：%s", e)
 
@@ -264,7 +276,51 @@ def main(argv=None) -> int:
 
 # -----------------------------------------------------------------------------
 
+def _importance_summary(by_win: dict) -> tuple[pd.DataFrame, dict]:
+    """
+    跨窗口汇总置零法重要性。
+
+    GKX（2020）§3.3：在每个训练样本上算 R² 下降，再「average these into a single
+    importance measure」，归一化到和为 1。这里先跨窗口平均原始下降量，再归一化
+    （负下降记 0）。IC 口径同法处理，作补充。
+
+    两项检验（2026-10-03 Louis 同意）：
+      - 跨窗口稳定性：各窗口重要性排名两两 Spearman 的均值（越高越稳）
+      - 口径一致性：两种口径汇总排名的 Spearman，及前 20 名重合数
+    """
+    from src.ml.evaluate import normalize_importance
+    from itertools import combinations
+    raw = pd.concat(by_win, names=["窗口", "特征"])
+    mean = raw.groupby(level="特征").mean()
+    imp = pd.DataFrame({m: normalize_importance(mean[m]) for m in ("r2", "ic")})
+    imp = imp.sort_values("r2", ascending=False)
+
+    def stability(m):
+        w = raw[m].unstack("特征")
+        cs = [w.iloc[i].corr(w.iloc[j], method="spearman")
+              for i, j in combinations(range(len(w)), 2)]
+        return round(float(np.nanmean(cs)), 3) if cs else float("nan")
+
+    diag = {
+        "窗口数": len(by_win),
+        "跨窗口稳定性_r2（两两 Spearman 均值）": stability("r2"),
+        "跨窗口稳定性_ic（两两 Spearman 均值）": stability("ic"),
+        "口径一致性（r2 vs ic 汇总排名 Spearman）": round(float(imp.r2.corr(imp.ic, method="spearman")), 3),
+        "前20名重合数": len(set(imp.r2.nlargest(20).index) & set(imp.ic.nlargest(20).index)),
+    }
+    try:
+        from src.factors.accounting import ACCOUNTING_FACTORS
+        acc = imp.index.isin(list(ACCOUNTING_FACTORS))
+        diag["会计块合计占比_r2"] = round(float(imp.r2[acc].sum()), 3)
+        diag["会计块合计占比_ic"] = round(float(imp.ic[acc].sum()), 3)
+        diag["会计块特征数"] = int(acc.sum())
+    except Exception:
+        pass
+    return imp, diag
+
+
 def _importance_last_window(panel, specs, cv, feats, cfg):
+    """[已弃用 2026-10-03] 旧做法：最后一个满窗、在**测试集**上算——与 GKX（训练集、跨窗口平均）不符。"""
     """在最后一个窗口上重训最强的树模型，算置零法重要性。
 
     只用一个窗口是成本考虑：置零法要对每个特征各跑一次预测，
