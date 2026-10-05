@@ -287,7 +287,7 @@ def evaluate(res: dict,
     """
     from src.backtest.engine import calc_monthly_returns, group_return
     from src.backtest.metrics import calc_ic, group_summary
-    from src.ml.evaluate import r2_oos, size_subsample_r2
+    from src.ml.evaluate import r2_oos, size_subsample_r2, flat_prediction_months
 
     y_true = res["y_true"]
     oos_months = pd.DatetimeIndex(
@@ -315,6 +315,15 @@ def evaluate(res: dict,
 
         ic = calc_ic(w, f, method="spearman")
         grp = group_return(w, f, n_groups=n_groups)
+        # 常数预测月份 = 模型不持仓：多空与 IC 记 0（#37，理由见 flat_prediction_months）
+        flat = flat_prediction_months(w.where(f.notna()))
+        if len(flat):
+            ic = ic.reindex(ic.index.union(flat)).sort_index()   # calc_ic 可能不返回无法排序的月份
+            ic.loc[flat] = 0.0
+            fi = grp.index.intersection(flat)
+            grp.loc[fi, :] = np.nan          # 无组合可言：各组收益不定义
+            grp.loc[fi, "LS"] = 0.0          # 多空 = 不持仓 = 0
+            log.info("  %s：%d 个月截面常数预测，按不持仓计（多空、IC 记 0）", name, len(flat))
         summ = group_summary(grp, freq=12)
 
         ls = summ.loc["LS"] if "LS" in summ.index else None

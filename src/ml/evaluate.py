@@ -72,6 +72,28 @@ def r2_oos_by(df: pd.DataFrame, y_col: str, pred_col: str,
         lambda g: r2_oos(g[y_col], g[pred_col]), include_groups=False)
 
 
+def flat_prediction_months(score: pd.DataFrame) -> pd.Index:
+    """截面上给不出排序的月份：该月有预测、但所有股票的预测值相同（常数预测）。
+
+    典型来源：ENet 在验证集上选中的正则化强到把全部系数压成 0（2026-10-05 实测：
+    2020 窗口 alpha=0.01、l1_ratio=0.5，g 关 A 59 / B 110 两组），预测 = 截距，全市场同一个数。
+
+    评估约定（待办 #37，方案 A）：这些月份视为**模型不持仓**——多空收益记 0、IC 记 0，
+    而不是 NaN 后被静默剔除。理由：
+      1. 可比性：不同模型在**同一组月份**上比较。剔除会让该模型少算一年（如 79 vs 91 月），
+         而被剔掉的恰是它「放弃预测」的那一年，夏普被抬高，且与其他模型不可比
+      2. 经济含义：常数预测 = 模型判断截面上无可用信号；按信号建多空组合时它不会下注，
+         实际收益就是 0，不是「这个月不存在」
+      3. 与 R²_oos 一致：R² 本就把常数预测算在内（常数预测的 R² 有定义），
+         只有排序类指标会因无法排序而缺失，补 0 后口径统一
+      4. IC 记 0 同理：无排序 = 无相关，是对「没有信息」的如实计分
+    分组收益（G1~Gn）在这些月份保持 NaN（没有组合可言），只有多空记 0。
+    """
+    n = score.notna().sum(axis=1)
+    k = score.nunique(axis=1, dropna=True)
+    return score.index[(n > 0) & (k <= 1)]
+
+
 def size_subsample_r2(df: pd.DataFrame, y_col: str, pred_col: str,
                       me_col: str = "me", date_level: str = "date",
                       p: float = 0.3) -> dict:

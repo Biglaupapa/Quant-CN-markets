@@ -147,8 +147,16 @@ def evaluate_score(score: pd.DataFrame,
     f = fwd.reindex(index=s.index, columns=cols)
     s = s.where(f.notna())   # 只在组建日股票池内分组 / 算换手（同 engine.group_return）
 
+    # 常数预测月份 = 不持仓（#37）：多空、IC 记 0；换手按空仓处理（该月不建仓，下月重建计满额换手）
+    from src.ml.evaluate import flat_prediction_months
+    flat = flat_prediction_months(s)
+    s.loc[flat] = np.nan
     ic = calc_ic(s, f, method="spearman")
     grp = group_return(s, f, n_groups=n_groups)
+    if len(flat):
+        ic = ic.reindex(ic.index.union(flat)).sort_index()   # calc_ic 可能不返回无法排序的月份
+        ic.loc[flat] = 0.0
+        grp.loc[grp.index.intersection(flat), "LS"] = 0.0
     summ = group_summary(grp, freq=12)
     ls = summ.loc["LS"] if "LS" in summ.index else None
 
