@@ -45,11 +45,12 @@ from src.config.settings import (
 )
 from src.strategy.combine_factors import (
     align_factor_directions,
+    restrict_to_pool,
     calc_rolling_icir_weights,
     combine_factors,
     lowdin_orthogonalize,
 )
-from src.backtest.engine import calc_monthly_returns, group_return
+from src.backtest.engine import calc_monthly_returns, formation_pool, group_return
 from src.backtest.metrics import calc_ic
 from src.backtest.report import print_factor_report, save_report, plot_nav_curve
 
@@ -820,9 +821,10 @@ def _run_single_market(
     if fund_in:
         print(f"    基本面  （{len(fund_in)}）：{fund_in}")
 
-    # 4.2 方向对齐
-    print("\n  方向对齐...")
-    aligned = align_factor_directions(factors_for_combine, active_directions)
+    # 4.2 限定组建日股票池 + 池内重新去极值 / 标准化（#34），再方向对齐
+    print("\n  池内标准化 + 方向对齐...")
+    pool = formation_pool(start=start, end=end, market=market)
+    aligned = align_factor_directions(restrict_to_pool(factors_for_combine, pool), active_directions)
 
     # 4.3 可选：Lowdin 正交化
     if MULTI_FACTOR_CONFIG.get("use_orthogonalize", False):

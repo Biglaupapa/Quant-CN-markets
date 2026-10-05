@@ -212,10 +212,9 @@ def _calc_turnover_20_raw(
     mask = _mask_builder(start=start, end=end, freq="D")
     turn = apply_universe(turn, mask)
 
-    valid_count = turn.rolling(window=TURNOVER_WINDOW).count()
-    turn[valid_count < MIN_ROLLING_VALID_DAYS] = np.nan
-
-    turn20   = turn.rolling(window=TURNOVER_WINDOW).mean()
+    # min_periods 必须显式传：rolling 默认 min_periods=window，窗口内一天停牌即整窗 NaN，
+    # 「至少 MIN_ROLLING_VALID_DAYS 天」形同虚设（待办 #15，2026-10-05 修复）
+    turn20   = turn.rolling(window=TURNOVER_WINDOW, min_periods=MIN_ROLLING_VALID_DAYS).mean()
     factor_m = to_monthly(turn20, method="last")
     return factor_m, mask
 
@@ -710,7 +709,7 @@ def calc_volatility_30(
     close = apply_universe(close, mask)
 
     ret     = close / close.shift(1) - 1
-    vol_30  = ret.rolling(window=VOLATILITY_WINDOW).std()
+    vol_30  = ret.rolling(window=VOLATILITY_WINDOW, min_periods=MIN_ROLLING_VALID_DAYS).std()   # 同上（#15）
 
     factor = to_monthly(vol_30, method="last")
     return preprocess(factor)
@@ -932,8 +931,11 @@ def _calc_ps_liq_beta(start: Optional[str] = None,
     liq_shock = (ar["y"] - (b[0] * ar["x"] + b[1])).rename("L")
 
     # ── Step4：36 月滚动回归 r_i = α + b·r_m + c·L ─────────────────
-    from src.backtest.engine import calc_monthly_returns
-    ret_m = calc_monthly_returns(start=start, end=end, market="A")
+    # 时序回归用**全部可得**的月度收益（收盘到收盘，不套组建日股票池）：
+    # β 是股票自身的属性，估计窗口不应受当月能否入组影响（待办 #21，2026-10-05 修复）
+    close_all = load_data([_CLOSE], start=start, end=end)[_CLOSE]
+    close_me = close_all.resample("ME").last().ffill(limit=1)
+    ret_m = close_me / close_me.shift(1) - 1
 
     mkt_d = _load_market_return_daily(start=start, end=end)
     mkt_m = (1 + mkt_d).groupby(mkt_d.index.to_period("M")).prod() - 1

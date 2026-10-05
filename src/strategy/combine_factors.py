@@ -28,6 +28,28 @@ from src.backtest.metrics import calc_ic
 # 1. 方向对齐
 # -----------------------------------------------------------------------------
 
+def restrict_to_pool(
+    factors_dict: dict[str, pd.DataFrame],
+    pool: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    """
+    合成前把各因子限定在 t 月末组建日股票池内，并在池内重新去极值（±3σ clip）+ z-score。
+
+    缓存里的因子是在「有因子值的全部股票」上做的 winsorize / standardize，
+    含不在股票池的股票（科创板 / 北交所、上市不满 6 个月、交易天数不足、规则 g 剔除者等），
+    池内各因子的均值、尺度因此不一，等权相加时权重被扭曲。
+    （待办 #34，2026-10-05：全量重跑合成等权夏普 1.44 → 1.50，截面秩相关 0.99）
+    中性化残差不在池内重新回归——只重做尺度，不重做回归。
+    """
+    from src.factors.base import winsorize, standardize
+
+    out = {}
+    for name, df in factors_dict.items():
+        m = pool.reindex(index=df.index, columns=df.columns).fillna(False).astype(bool)
+        out[name] = standardize(winsorize(df.where(m)))
+    return out
+
+
 def align_factor_directions(
     factors_dict: dict[str, pd.DataFrame],
     direction_map: dict[str, int],

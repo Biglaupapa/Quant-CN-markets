@@ -21,6 +21,18 @@ from src.data.loader import load_data, load_data_hk
 from src.data.universe import build_formation_mask, build_investable_mask_hk
 
 
+def formation_pool(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    market: str = "A",
+    formation_config: Optional[dict] = None,
+) -> pd.DataFrame:
+    """t 月末组建日股票池（月末 × 股票，bool）。A 股 = build_formation_mask，港股 = 月度投资域。"""
+    if market == "HK":
+        return build_investable_mask_hk(start=start, end=end, freq="M")
+    return build_formation_mask(start=start, end=end, config=formation_config)
+
+
 def calc_monthly_returns(
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -56,12 +68,7 @@ def calc_monthly_returns(
     formation_config : dict, optional
         覆盖 settings.FORMATION_CONFIG（仅 A 股），用于逐条规则对比
     """
-    if market == "HK":
-        loader = load_data_hk
-        mask_fn = lambda start, end: build_investable_mask_hk(start=start, end=end, freq="M")
-    else:
-        loader = load_data
-        mask_fn = lambda start, end: build_formation_mask(start=start, end=end, config=formation_config)
+    loader = load_data_hk if market == "HK" else load_data
     close = loader(["close_adj"], start=start, end=end).get("close_adj")
     if close is None:
         raise ValueError(f"[engine] 缺少 close_adj 数据（market={market}）")
@@ -71,7 +78,7 @@ def calc_monthly_returns(
     ret = close_me / close_me.shift(1) - 1
 
     # 组建：t 月末可投资 → 才有 t+1 月收益（shift(1) 把 t 月末的判断对齐到 t+1 行）
-    formed = mask_fn(start, end).shift(1)
+    formed = formation_pool(start, end, market, formation_config).shift(1)
     formed = formed.reindex(index=ret.index, columns=ret.columns).fillna(False).astype(bool)
     return ret.where(formed)
 

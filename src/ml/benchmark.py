@@ -66,7 +66,11 @@ def build_composite(pool: Optional[Sequence[str]] = None,
     if directions is None:
         directions = FACTOR_DIRECTIONS
 
+    from src.backtest.engine import formation_pool
+    from src.strategy.combine_factors import restrict_to_pool
+
     fac = {n: load_factor(n) for n in pool}
+    fac = restrict_to_pool(fac, formation_pool())          # 与 main 的合成一致（#34）
     return combine_factors(align_factor_directions(fac, directions), weights="equal")
 
 
