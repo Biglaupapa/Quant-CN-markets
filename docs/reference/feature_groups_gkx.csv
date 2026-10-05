@@ -4,7 +4,6 @@ est_peg,4 估值与基本面,False
 ni_inc8q,4 估值与基本面,True
 roll_spread,2 流动性,False
 est_pe_ftm,4 估值与基本面,False
-float_shares_chg,2 流动性,False
 capex_abn,4 估值与基本面,True
 amihud,2 流动性,False
 skew_21,3 风险,False
@@ -12,7 +11,6 @@ f_score,4 估值与基本面,True
 beta_smb,3 风险,False
 rd_me,4 估值与基本面,True
 ap_beta5,3 风险,False
-free_float_ratio,2 流动性,False
 capm_beta,3 风险,False
 ret_6_0,1 价格趋势,False
 ret_36_13,1 价格趋势,False

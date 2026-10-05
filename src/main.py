@@ -291,8 +291,6 @@ FACTOR_FLAGS = {
     "amihud_vwap":               True,   # ★ VWAP 独有
     "high_low_range":            True,
     # 规模 / 股本族
-    "free_float_ratio":          True,   # ★ A股特色
-    "float_shares_chg":          True,   # 解禁压力
     "age":                       True,
     # 估值比率的时序变换（仅变换，无反推）
     "ep":                        True,
@@ -482,7 +480,7 @@ def _get_factor_func(factor_name: str):
         "rvol_21", "rvol_252", "rmax1_21", "rmax5_21", "skew_21",
         "zero_trades_252", "dolvol_126", "turn_std_21",
         "close_vwap_dev", "amihud_vwap", "high_low_range",
-        "free_float_ratio", "float_shares_chg", "age",
+        "age",
         "ep", "ep_lsy", "sp", "pb_chg_12",
     ):
         mapping[_name] = getattr(expansion, f"calc_{_name}")

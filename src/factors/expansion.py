@@ -411,50 +411,6 @@ def calc_high_low_range(start=None, end=None) -> pd.DataFrame:
 # `float_shares` 是 Choice 原始字段（LIQSHARE），其变化率合法。
 # =============================================================================
 
-def calc_free_float_ratio(start=None, end=None) -> pd.DataFrame:
-    """
-    ★ 流通占比：流通股本 / 总股本（因子名沿用 free_float_ratio，实为流通股本口径）
-
-    **A 股特色特征**，在美股几乎无意义（美股基本全流通），
-    但 A 股存在大量限售股、国有股，流通比例差异极大。
-    比例低 → 筹码集中、易被操纵、流动性差。
-    2026-10-02 由 neg_market_value / market_value 改为 float_shares / total_shares：
-    两个都是 Choice 直接字段（LIQSHARE / TOTALSHARE），同源同生效日；流通市值换成财汇后，
-    旧式会变成分子财汇、分母 Choice，股本生效日错位。见 Database/docs/【登记】指标权威来源.md。
-    """
-    d = load_data(["float_shares", "total_shares"], start=start, end=end)
-    neg, tot = d.get("float_shares"), d.get("total_shares")
-    if neg is None or tot is None:
-        log.warning("[free_float_ratio] 缺少 float_shares 或 total_shares")
-        return pd.DataFrame()
-
-    mask = build_investable_mask(start=start, end=end, freq="D")
-    neg, tot = apply_universe(neg, mask), apply_universe(tot, mask)
-
-    ratio = neg / tot.where(tot > 0)
-    return preprocess(to_monthly(ratio, method="last"))
-
-
-def calc_float_shares_chg(start=None, end=None) -> pd.DataFrame:
-    """
-    ★ 流通股本 12 月变化率：float_shares_t / float_shares_{t-12} − 1
-
-    捕捉**限售股解禁**压力。A 股的解禁是可预期的供给冲击，
-    解禁量大 → 抛压大 → 后续收益低（预期负向）。
-    `float_shares` 是 Choice 原始字段 LIQSHARE，非反推。
-    """
-    ffs = load_data(["float_shares"], start=start, end=end).get("float_shares")
-    if ffs is None:
-        log.warning("[float_shares_chg] 缺少 float_shares 数据")
-        return pd.DataFrame()
-
-    mask = build_investable_mask(start=start, end=end, freq="D")
-    ffs_m = to_monthly(apply_universe(ffs, mask), method="last")
-
-    chg = ffs_m / ffs_m.shift(12).where(ffs_m.shift(12) > 0) - 1
-    return preprocess(chg)
-
-
 def calc_age(start=None, end=None) -> pd.DataFrame:
     """
     [gkx] age：上市年限（log(上市交易日数)）。
