@@ -34,13 +34,26 @@ def group_by_score(
         分组标签，值为 1（最低分组）到 n_groups（最高分组），NaN 表示无效
     """
     result = score.copy() * np.nan
+    probs = np.linspace(0, 1, n_groups + 1)
 
     for date in score.index:
         row = score.loc[date].dropna()
         if len(row) < n_groups * 5:  # 每组至少 5 只股票
             continue
-        labels = pd.qcut(row, q=n_groups, labels=False, duplicates="drop")
-        result.loc[date, labels.index] = labels.values + 1  # 1-based
+        # 成员划分与 pd.qcut 完全一致：同一分位实现（Series.quantile，线性插值）、右闭区间
+        # （x ≤ 第 i 个分位点 → 第 i 组），取值相同的股票必落同一组。
+        edges = row.quantile(probs).to_numpy()
+        labels = np.searchsorted(edges[1:-1], row.to_numpy(), side="left") + 1
+        # 标签锚定两端（待办 #36，2026-10-05）：取值大量并列时分位点重合、部分组为空，
+        # 原 qcut(duplicates="drop", labels=False) 会把剩下的组**从 0 重新编号**，
+        # 最高一档被标成 G4 / G3，G5 与多空（G5−G1）整月变 NaN（ni_inc8q 235/235 个月、
+        # f_score 110 个月）。此处保留原分位编号，并令最低一档 = G1、最高一档 = G5。
+        # 无并列的月份与原实现逐格相同（113 个因子中 108 个完全不变）。
+        present = np.unique(labels)
+        if present.size >= 2:
+            labels = np.where(labels == present.min(), 1,
+                              np.where(labels == present.max(), n_groups, labels))
+        result.loc[date, row.index] = labels
 
     return result
 

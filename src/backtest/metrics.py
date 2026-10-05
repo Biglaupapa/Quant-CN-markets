@@ -23,6 +23,8 @@ from typing import Optional
 def annualized_return(ret_series: pd.Series, freq: int = 12) -> float:
     """年化收益率（复利）"""
     n = len(ret_series.dropna())
+    if n == 0:
+        return np.nan
     cumret = (1 + ret_series.dropna()).prod()
     return cumret ** (freq / n) - 1
 
