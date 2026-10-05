@@ -13,7 +13,7 @@ from src.ml.run import ML_CONFIG
 from src.ml.dataset import build_panel, feature_cols
 from src.ml.cv import RollingWindowCV
 from src.ml.models import default_specs, fit_with_validation
-from src.ml.pipeline import _slice
+from src.ml.pipeline import _slice, mask_immature_features
 from src.ml.evaluate import importance_drops_groups, normalize_importance
 from src.config.compute import apply_thread_limits
 
@@ -31,7 +31,10 @@ dates = pd.DatetimeIndex(panel.index.get_level_values("date").unique()).sort_val
 specs = [s for s in default_specs(feats, fast=False) if s.name in ("LGBM", "OLS-H")]
 rows = []
 for wi, sp in enumerate(cv.split(dates), 1):
-    Xtr, ytr, ixtr = _slice(panel, sp.train, feats); Xva, yva, _ = _slice(panel, sp.val, feats)
+    Xtr, ytr, ixtr = _slice(panel, sp.train, feats); Xva, yva, ixva = _slice(panel, sp.val, feats)
+    _, (Xtr, Xva) = mask_immature_features(np.vstack([Xtr, Xva]),
+                                           ixtr.get_level_values("date").append(ixva.get_level_values("date")),
+                                           feats, cfg["min_feature_months"], Xtr, Xva)   # 与 pipeline 一致（#23）
     for spec in specs:
         m, _, _ = fit_with_validation(spec, Xtr, ytr, Xva, yva, loss=cfg["loss"])
         d = importance_drops_groups(m, Xtr, ytr, ixtr.get_level_values("date"), feats, groups)

@@ -36,6 +36,30 @@ def _slice(panel: pd.DataFrame, months: pd.DatetimeIndex,
             sub.index)
 
 
+def mask_immature_features(X_fit: np.ndarray, dates_fit: pd.Index, feats: list[str],
+                           min_months: int, *arrays: np.ndarray) -> tuple[list[str], list[np.ndarray]]:
+    """训练样本中有效历史不足 `min_months` 个月的特征，在本窗口整列置 0（= 缺失填充值）。
+
+    「有效月」= 该月超过一半股票的值非 0（面板 rank→[-1,1] 后缺失即 0）。只看拟合用的
+    训练样本（train+val），不引入前视。（待办 #23，2026-10-05）
+    起因：rd_sale / rd_me / rd_at 自 2018-10 才有值（2018 年起利润表单列研发费用）。
+    训练期到 2018-12 的窗口里它们只有 3–4 个月有值，线性模型据此估出过大系数
+    （rd_sale 0.48，其余特征 ≤ 0.08），2019 年测试期全面有值后预测失控（单窗 R²_oos −589%）。
+    返回 (被置 0 的特征, 置 0 后的各数组)；置 0 而非删列，保持列结构与重要性对齐。
+    """
+    covered = pd.DataFrame(X_fit != 0, columns=feats).groupby(np.asarray(dates_fit)).mean() > 0.5
+    immature = [f for f, k in covered.sum().items() if k < min_months]
+    if not immature:
+        return [], list(arrays)
+    jj = [feats.index(f) for f in immature]
+    out = []
+    for a in arrays:
+        a = a.copy()
+        a[:, jj] = 0.0
+        out.append(a)
+    return immature, out
+
+
 def _fit_calibration(pred_va: np.ndarray, y_va: np.ndarray) -> tuple[float, float]:
     """在**验证集**上拟合一元映射 ŷ' = a + b·ŷ。
 
@@ -126,7 +150,8 @@ def run(panel: pd.DataFrame,
         calibrate: bool = True,
         cooldown: float = 0.0,
         verbose: bool = True,
-        importance_model: Optional[str] = None) -> dict:
+        importance_model: Optional[str] = None,
+        min_feature_months: int = 0) -> dict:
     """滚动训练全部模型，返回样本外预测。
 
     Parameters
@@ -134,6 +159,8 @@ def run(panel: pd.DataFrame,
     calibrate : bool
         是否在验证集上拟合一元映射把预测放回收益量纲（见 `_fit_calibration`）。
         **不改变任何排序**，只影响 R²_oos。默认开启。
+    min_feature_months : int
+        特征在训练样本中至少要有的有效月数，不足则本窗置 0（见 `mask_immature_features`）。0 = 不检查。
     cooldown : float
         每个滚动窗口训练完后的散热间歇（秒）。默认 0 = 不停。
         纯粹是给机器降温用的，**不影响任何计算结果**——窗口之间本就无状态。
@@ -175,10 +202,17 @@ def run(panel: pd.DataFrame,
         assert_no_leakage(sp)                       # 每个窗口都验一次，成本可忽略
 
         X_tr, y_tr, ix_tr = _slice(panel, sp.train, feats)
-        X_va, y_va, _ = _slice(panel, sp.val, feats)
+        X_va, y_va, ix_va = _slice(panel, sp.val, feats)
         X_te, y_te, ix_te = _slice(panel, sp.test, feats)
         if len(X_te) == 0:
             continue
+        if min_feature_months:
+            immature, (X_tr, X_va, X_te) = mask_immature_features(
+                np.vstack([X_tr, X_va]),
+                ix_tr.get_level_values("date").append(ix_va.get_level_values("date")),
+                feats, min_feature_months, X_tr, X_va, X_te)
+            if immature and verbose:
+                log.info("    历史不足 %d 月、本窗置 0：%s", min_feature_months, immature)
 
         y_parts.append(pd.Series(y_te, index=ix_te))
         if verbose:

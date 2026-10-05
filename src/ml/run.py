@@ -50,11 +50,13 @@ ML_CONFIG = {
     # ── 样本切分（GKX 2020 附录 D 的 hybrid：训练集扩展、验证集定长前滚、每年重训）──
     # 2026-10-03 改为扩展窗口（Louis 决定，与 GKX 一致）。原文："recursively increasing the training
     # sample ... We maintain the same size of the validation sample, but roll it forward"。
-    # 长度：GKX 为 18 年 / 12 年 / 1 年（美股 60 年）；A 股样本短，沿用 60 / 24 / 12 个月作为起始长度
-    "train_months": 60,
-    "val_months":   24,
+    # 长度：GKX 为 18 年 / 12 年 / 1 年（美股 60 年）；A 股按 LWZ（2022）为 9 年 / 3 年 / 1 年
+    "train_months": 108,            # 9 年 / 3 年：按 Leippold, Wang & Zhou（2022, JFE）A 股设置
+    "val_months":   36,             # （训练 2000–2008、验证 2009–2011、测试 2012–2020）；2026-10-05 由 60 / 24 改。
+                                    # 首个测试年 = 2019（面板 2007 起）
     "test_months":  12,
-    "expanding":    True,           # True = 训练集起点固定（扩展窗口，GKX）；False = 定长滚动
+    "expanding":    True,
+    "min_feature_months": 24,       # 特征在训练样本中至少 24 个有效月才进模型（待办 #23；见 pipeline.mask_immature_features）           # True = 训练集起点固定（扩展窗口，GKX）；False = 定长滚动
 
     # ── 训练 ─────────────────────────────────────────────────────────────
     "loss":         "huber",        # 验证集选超参的损失。**不要改成 mse**，
@@ -188,7 +190,8 @@ def main(argv=None) -> int:
     res = pipeline.run(panel, specs=specs, cv=cv, loss=cfg["loss"],
                        importance_model=imp_model,
                        fast=cfg["fast"], calibrate=cfg["calibrate"],
-                       cooldown=cfg["cooldown"])
+                       cooldown=cfg["cooldown"],
+                       min_feature_months=cfg["min_feature_months"])
     print(f"\n  训练总耗时 {time.time() - t0:.0f}s")
     print("  各模型累计耗时：" +
           "  ".join(f"{k}={v:.0f}s" for k, v in res["timing"].items() if v > 0))
