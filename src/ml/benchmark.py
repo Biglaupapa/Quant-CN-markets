@@ -141,6 +141,7 @@ def evaluate_score(score: pd.DataFrame,
     cols = s.columns.intersection(fwd.columns)
     s = s.reindex(columns=cols)
     f = fwd.reindex(index=s.index, columns=cols)
+    s = s.where(f.notna())   # 只在组建日股票池内分组 / 算换手（同 engine.group_return）
 
     ic = calc_ic(s, f, method="spearman")
     grp = group_return(s, f, n_groups=n_groups)

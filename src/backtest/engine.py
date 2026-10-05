@@ -108,6 +108,12 @@ def group_return(
     factor_aligned = factor.reindex(index=common_idx, columns=common_cols)
     ret_aligned    = monthly_ret.reindex(index=common_idx, columns=common_cols)
 
+    # 分位点只在组建日股票池内切（与 calc_ic 先掩码后排秩一致）。
+    # calc_monthly_returns 对不在 t 月末股票池的股票置 NaN，故「下期收益非空」即入池。
+    # 原实现在因子全截面上切分位、求均值时才丢弃无收益股票：规则 g 打开时最小 30%
+    # 有因子值无收益，size 的 G1 有 196/237 个月整组为空（2026-10-04 发现）。
+    factor_aligned = factor_aligned.where(ret_aligned.notna())
+
     groups = group_by_score(factor_aligned, n_groups=n_groups)
 
     records = []
