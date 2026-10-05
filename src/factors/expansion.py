@@ -177,12 +177,40 @@ def calc_rmax1_21(start=None, end=None) -> pd.DataFrame:
 def calc_rmax5_21(start=None, end=None) -> pd.DataFrame:
     """[gkx] rmax5_21d：过去 21 日**前 5 大**单日收益的均值（MAX 的稳健版）。"""
     ret = _daily_ret(start, end)
-    rmax5 = ret.rolling(21, min_periods=MIN_ROLLING_VALID_DAYS).apply(
-        lambda x: np.mean(np.sort(x[~np.isnan(x)])[-5:])
-        if (~np.isnan(x)).sum() >= 5 else np.nan,
-        raw=True,
-    )
+    rmax5 = _rolling_topk_mean(ret, window=21, k=5,
+                               min_periods=max(MIN_ROLLING_VALID_DAYS, 5))
     return preprocess(to_monthly(rmax5, method="last"))
+
+
+def _rolling_topk_mean(df: pd.DataFrame, window: int, k: int,
+                       min_periods: int, chunk: int = 250) -> pd.DataFrame:
+    """
+    滚动窗口内前 k 大值的均值，等价于
+    ``df.rolling(window, min_periods).apply(lambda x: mean(sort(x[~nan])[-k:]))``
+    （要求 min_periods ≥ k）。
+
+    原实现逐「日 × 股票」调用 Python lambda（约 3000 万次，单因子 65 分钟）。
+    这里按日分块展开成 (日, 股票, window) 三维视图，NaN 置 −inf 后
+    np.partition 取前 k 大：有效数 ≥ min_periods ≥ k 时前 k 大必然都是有限值，
+    不足时整格置 NaN，与 rolling 的 min_periods 语义一致。
+    顶部补 window−1 行 NaN，复现 rolling 在序列开头的不满窗口。
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    vals = df.to_numpy(dtype=float)
+    n, m = vals.shape
+    padded = np.vstack([np.full((window - 1, m), np.nan), vals])
+    win = sliding_window_view(padded, window, axis=0)       # (n, m, window)，只读视图
+    out = np.full((n, m), np.nan)
+    for s in range(0, n, chunk):
+        w = win[s:s + chunk]
+        valid = (~np.isnan(w)).sum(axis=-1)
+        top = np.partition(np.where(np.isnan(w), -np.inf, w), window - k, axis=-1)[..., window - k:]
+        with np.errstate(invalid="ignore"):
+            res = top.mean(axis=-1)
+        res[valid < min_periods] = np.nan
+        out[s:s + chunk] = res
+    return pd.DataFrame(out, index=df.index, columns=df.columns)
 
 
 def calc_skew_21(start=None, end=None) -> pd.DataFrame:
