@@ -116,18 +116,22 @@ def size_subsample_r2(df: pd.DataFrame, y_col: str, pred_col: str,
 # 二、Diebold-Mariano 检验
 # =============================================================================
 
-def dm_test(e1, e2, h: int = 1, power: int = 2) -> tuple[float, float]:
-    """Diebold-Mariano 预测精度检验，Newey-West 修正。
+def dm_test(e1, e2, dates, nw_lags: int = 6, power: int = 2) -> tuple[float, float]:
+    """Diebold-Mariano 预测精度检验——GKX（2020）修正版：先按月截面平均，再做时序检验。
 
-        d_t = |e1_t|^power − |e2_t|^power
-        DM  = d̄ / se(d̄)
+        d_{i,t} = |e1_{i,t}|^power − |e2_{i,t}|^power
+        d_t     = 当月所有股票 d_{i,t} 的截面平均          （约 91 个月度观测）
+        DM      = mean(d_t) / se_NW(mean(d_t))             （Newey-West，Bartlett 权重，nw_lags 阶）
 
-    统计量**为正**表示模型 2（e2）比模型 1 更准（模型1 的损失更大）。
+    统计量**为正**表示模型 2（e2）比模型 1 更准（模型 1 的损失更大）。
 
-    ── 为什么这个检验是必需的 ──────────────────────────────────────────────
-    各模型的 R²_oos 都挤在 0.1%~0.4% 这个窄带里，「RF 的 0.33% 比 PLS 的
-    0.27% 更好」这句话本身没有统计意义——差距可能完全来自抽样噪音。
-    不做 DM 检验，模型排序的结论站不住。
+    ── 为什么必须先按月平均（待办 #39，2026-10-06 修正）─────────────────────
+    同一个月里各股票的预测误差高度相关：误差 = 真实收益 − 预测，真实收益含全市场共同成分，
+    两个模型误差平方之差在同月内同涨同跌。真正独立的信息量约等于月数，而不是「股票×月」数。
+    原实现把约 36 万个股票×月当独立样本，标准误低估数十倍，t 值出现 25、33 这种量级；
+    且注释称 Newey-West、实际滞后 1 阶未做修正。GKX 原文：「we modify the DM test by comparing
+    the cross-sectional average of prediction errors from each model」。
+    滞后 6 阶与本框架张成检验一致（常用经验公式 floor(4·(T/100)^(2/9)) 对 T≈91 约为 3，6 更保守）。
 
     Returns
     -------
@@ -137,22 +141,20 @@ def dm_test(e1, e2, h: int = 1, power: int = 2) -> tuple[float, float]:
 
     e1 = np.asarray(e1, dtype=np.float64)
     e2 = np.asarray(e2, dtype=np.float64)
+    dates = np.asarray(dates)
     m = np.isfinite(e1) & np.isfinite(e2)
-    e1, e2 = e1[m], e2[m]
-    if len(e1) < 3:
+    d_it = np.abs(e1[m]) ** power - np.abs(e2[m]) ** power
+    d = pd.Series(d_it).groupby(dates[m]).mean().sort_index().to_numpy()   # 月度截面平均
+    n = len(d)
+    if n < 3:
         return np.nan, np.nan
 
-    d = np.abs(e1) ** power - np.abs(e2) ** power
-    n = len(d)
     dbar = d.mean()
     dc = d - dbar
-
-    # Newey-West 长期方差（h−1 阶自协方差，Bartlett 权重）
-    gamma0 = float((dc ** 2).sum()) / n
-    var = gamma0
-    for lag in range(1, h):
+    var = float((dc ** 2).sum()) / n
+    for lag in range(1, min(nw_lags, n - 1) + 1):
         g = float((dc[lag:] * dc[:-lag]).sum()) / n
-        var += 2.0 * (1.0 - lag / h) * g
+        var += 2.0 * (1.0 - lag / (nw_lags + 1)) * g
     var /= n
     if not np.isfinite(var) or var <= 0:
         return np.nan, np.nan
@@ -162,10 +164,11 @@ def dm_test(e1, e2, h: int = 1, power: int = 2) -> tuple[float, float]:
     return float(dm), float(pv)
 
 
-def dm_matrix(preds: dict[str, np.ndarray], y_true,
-              h: int = 1, power: int = 2) -> pd.DataFrame:
-    """两两 DM 统计量矩阵，带显著性星号。
+def dm_matrix(preds: dict[str, np.ndarray], y_true, dates,
+              nw_lags: int = 6, power: int = 2) -> pd.DataFrame:
+    """两两 DM 统计量矩阵（GKX 修正版，按月截面平均），带显著性星号。
 
+    `dates` 与 `y_true`、各 `preds` 逐行对齐（每个股票×月观测所属的月份）。
     读法：**正值表示「列模型」优于「行模型」**。
     """
     y = np.asarray(y_true, dtype=np.float64)
@@ -176,7 +179,7 @@ def dm_matrix(preds: dict[str, np.ndarray], y_true,
             if a == b:
                 out.loc[a, b] = "—"
                 continue
-            dm, pv = dm_test(y - preds[a], y - preds[b], h=h, power=power)
+            dm, pv = dm_test(y - preds[a], y - preds[b], dates, nw_lags=nw_lags, power=power)
             if not np.isfinite(dm):
                 out.loc[a, b] = "n/a"
                 continue

@@ -211,6 +211,13 @@ def main(argv=None) -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     if cfg["save_output"]:
         tab.to_csv(OUT_DIR / "model_summary.csv")
+        # 逐股票×月的样本外预测与标签（#39 / #40：之后改检验或加权口径可直接重算，无需重训）
+        pd.DataFrame({"y_true": res["y_true"], **res["preds"]}).to_pickle(OUT_DIR / "predictions.pkl")
+        # 逐月多空收益（等权 / 市值加权），供回撤来源、分时期对比等事后分析
+        ls_m = {f"{k}_EW": v["LS"] for k, v in res.get("group_ret", {}).items()}
+        ls_m.update({f"{k}_VW": v["LS"] for k, v in res.get("group_ret_vw", {}).items()})
+        if ls_m:
+            pd.DataFrame(ls_m).to_csv(OUT_DIR / "ls_monthly.csv")
         for k, v in res["params"].items():
             v.to_csv(OUT_DIR / f"params_{k}.csv", index=False)
         if res.get("cal"):
@@ -230,12 +237,13 @@ def main(argv=None) -> int:
     if cfg["run_dm"] and len(res["preds"]) > 1:
         from src.ml.evaluate import dm_matrix
         print("\n[Step 6] Diebold-Mariano 两两检验")
-        print("  正值 = 列模型优于行模型；*/**/*** = 10%/5%/1% 显著")
+        print("  GKX 修正版：每月截面平均损失差 → Newey-West 6 阶；正值 = 列模型优于行模型；*/**/*** = 10%/5%/1% 显著")
         common = None
         for v in res["preds"].values():
             common = v.index if common is None else common.intersection(v.index)
         preds = {k: v.loc[common].to_numpy() for k, v in res["preds"].items()}
-        dm = dm_matrix(preds, res["y_true"].loc[common].to_numpy())
+        dm = dm_matrix(preds, res["y_true"].loc[common].to_numpy(),
+                       common.get_level_values("date"))       # GKX：按月截面平均后检验（#39）
         print("\n" + dm.to_string())
         if cfg["save_output"]:
             dm.to_csv(OUT_DIR / "dm_matrix.csv")
