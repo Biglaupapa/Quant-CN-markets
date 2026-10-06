@@ -13,6 +13,7 @@
 #   RF       随机森林                         深度 × 特征数
 #   GBRT     梯度提升（Huber 损失）           深度 × 学习率 × 叶子样本数
 #   LGBM     LightGBM（可选依赖）             同上
+#   NN1~NN5  前馈神经网络（ml/nn.py，PyTorch）  L1 × 学习率；验证集早停、10 种子集成
 #
 # ── 为什么调参用 Huber 损失而不是 MSE ───────────────────────────────────────
 # 这是 GKX 的核心手法之一，不是可选项。个股月度收益是重尾的：本项目面板里
@@ -90,6 +91,7 @@ class ModelSpec:
     grid: dict[str, list] = field(default_factory=dict)
     features: Optional[list[str]] = None      # None = 用全部特征
     note: str = ""
+    early_stopping: bool = False              # True = 验证集用于早停：fit(X, y, X_val, y_val)，不再 train+val 重训（NN，GKX）
 
     def param_list(self) -> list[dict]:
         from sklearn.model_selection import ParameterGrid
@@ -298,6 +300,13 @@ def default_specs(features: list[str],
                    "learning_rate": [0.05] if fast else [0.01, 0.05, 0.1],
                    "min_samples_leaf": [500] if fast else [200, 500, 1000]}),
     ]
+    from src.ml.nn import HIDDEN, GKXNet, has_torch
+    if has_torch():
+        for nm, hid in HIDDEN.items():
+            specs.append(ModelSpec(nm, (lambda hid=hid: (lambda **kw: GKXNet(hidden=hid, **kw)))(),
+                                   {"l1": [1e-5, 1e-3], "lr": [1e-3, 1e-2]}, None,
+                                   f"GKX 前馈网络，隐藏层 {hid}，10 种子集成、验证集早停",
+                                   early_stopping=True))
     if include_lgbm and has_lightgbm():
         specs.append(ModelSpec("LGBM", _lgbm,
                                {"max_depth": [4, 6] if fast else [3, 4, 6, 8],
@@ -328,6 +337,17 @@ def fit_with_validation(spec: ModelSpec,
     """
     fn = LOSSES[loss]
     params = spec.param_list()
+
+    if spec.early_stopping:
+        # 神经网络（GKX）：验证集同时用于早停与选超参 → 不合并重训，直接返回验证损失最优的那个
+        best, best_p, best_l = None, None, np.inf
+        for p in params:
+            m = spec.build(**p)
+            m.fit(X_tr, y_tr, X_va, y_va)
+            l = fn(y_va, np.asarray(m.predict(X_va)).ravel())
+            if l < best_l:
+                best, best_p, best_l = m, p, l
+        return best, best_p, best_l
 
     if len(params) == 1:
         model = spec.build(**params[0])
