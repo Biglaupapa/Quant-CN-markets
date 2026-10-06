@@ -58,12 +58,19 @@ Quant/                       # git 跟踪：仅 src/ + 项目文件（数据/结
 │   │   ├── engine.py        # 月度分组回测核心
 │   │   ├── metrics.py       # 绩效指标（IC、ICIR、Sharpe、最大回撤）
 │   │   └── report.py        # 报告输出（控制台 + CSV + 净值曲线 PNG）
+│   ├── ml/                  # ★ 机器学习资产定价（GKX 2020 框架，见 src/ml/README.md）
+│   │   ├── run.py           #   入口 + ML_CONFIG（python -m src.ml.run）
+│   │   ├── models.py nn.py  #   模型库（EW-Sign / OLS-H / PLS / ENet / LGBM / NN1–NN5）
+│   │   └── pipeline.py evaluate.py benchmark.py dataset.py cv.py
 │   └── strategy/
-│       ├── optimizer.py     # 因子打分与分组
+│       ├── optimizer.py     # 因子打分与分组（成员同 qcut，标签锚定 G1 / Gn）
 │       ├── scoring.py       # 因子打分
 │       └── combine_factors.py # 多因子合成
 │
-├── output/                  # 回测结果（不跟踪）
+├── scripts/                 # run_g_variant.py（g 开 / 关对照）、audit_groups.py（分组体检）、
+│                            # check_priority1.py、diag_olsh.py、ml_group_importance.py 等
+├── run_ml_compare.sh        # ML 对照：A 59 vs B 全部特征，g 关 / 开
+├── output/                  # 回测结果（不跟踪）；baseline_20261006/ 为 #39 / #40 修改前存档
 │   ├── cache/               # 因子缓存，命中则跳过重新计算
 │   ├── A/stats/  A/img/     # A 股 CSV 统计 + 净值曲线 PNG
 │   └── HK/stats/ HK/img/    # 港股
@@ -241,7 +248,7 @@ BACKTEST_CONFIG = {
 | 合成池复审 | **关** | §十八 |
 | LSY 复现、CH-3 / CH-4 因子 | **开** | §十一 ~ §十四 |
 
-### ★ 2026-10-02 ~ 03 成果索引（方法文档 `docs/【方法】回测口径与文献对齐.md`）
+### ★ 2026-10-02 ~ 06 成果索引（方法文档 `docs/【方法】回测口径与文献对齐.md`）
 
 | 节 | 内容 | 关键结论 |
 |---|---|---|
@@ -255,6 +262,7 @@ BACKTEST_CONFIG = {
 | §二十一 | 规则 g 开 / 关全量对照（113 因子 + 合成 + ML）、修复分组 bug | g 开：合成 1.44 → 0.97，size / amihud 大幅减弱，EP 变强；ML OLS-H 2.34 → 1.69、LGBM 1.73 → 1.79，张成 α 17.9% → 18.8% |
 | §二十二 | 变更总览（为什么改、影响） | 旧 1.32 → 收益侧 1.45 → a–f 1.46 → 现行 1.50；上升主要来自入场时点 |
 | §二十三 | #15 / #34 / #21 口径修复 | 合成 g 关 1.44 → 1.50、g 开 0.97 → 1.06；数据更新本身零影响；LGBM 单次结果对输入敏感（±0.15 视为噪声） |
+| §二十八 | 与文献（GKX / LWZ）的对比分析 | 结构性结论与 LWZ 一致；数值低于 LWZ，主因样本期（2019 后可预测性下降）；深度与回撤不一致 |
 | §二十七 | #39 DM 按 GKX 修正、#40 增加 A 股市值加权：前后对比 | DM 旧实现模拟误拒 91%→9%，前列模型间差异不显著；市值加权后合成 1.50 → 0.82，ML 相对优势更大、NN 最好 |
 | §二十六 | 神经网络 NN1–NN5（#38，GKX 设置，PyTorch） | 与 PLS / ENet 相当或略好（g 关 NN2 2.38），浅层最好；对合成 β 仅约 0.55，α 约 20% |
 | §二十五 | B 类：#20 / #14 量化后维持现状；#9 PLS / ENet；#33 组重要性新划分；#37 常数预测按不持仓计 | PLS / ENet 夏普 1.7–2.2 且 R² 为正；流动性组仍第一，g 开估值组上升 |

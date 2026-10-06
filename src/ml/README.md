@@ -12,8 +12,10 @@ cd /Users/louis/MyProjects/Quant
 conda activate /Users/louis/MyProjects/venv
 
 python -m src.ml.run --dry-run                 # 只看面板与切分方案
-python -m src.ml.run --fast                    # 缩小网格（约 15 分钟）
-python -m src.ml.run --full                    # 完整网格（约 2.5 小时）
+python -m src.ml.run --fast                    # 缩小网格（跑通验证用）
+python -m src.ml.run --full                    # 完整网格（10 个模型、110 特征约 1–1.5 小时）
+./run_ml_compare.sh [off|on]                   # A 59 vs B 全部特征对照；g 关 / 开（输出独立目录）
+python scripts/run_g_variant.py ml --g on --out <目录> -- --full   # g 开、不覆盖默认输出
 python -m src.ml.run --models EW-Sign,LGBM     # 只跑指定模型
 python -m src.ml.run --features pool           # 只用合成池那 10 个特征
 ```
@@ -52,8 +54,18 @@ numpy 背后的 BLAS——环境变量那一层由 `src/__init__.py` 在 numpy �
 ⚠️ 改线程数**不改变任何结果**：模型都固定了 `random_state`，上面四组的
 `predict` 输出逐位相同（-0.016187 / -0.015971 / …）。并行度只影响速度。
 
-输出在 `output/ml/`：`model_summary.csv`、`benchmark_compare.csv`、
-`dm_matrix.csv`、`variable_importance.csv`、`params_<模型>.csv`。
+输出在 `output/ml/`（或 `--out` 指定目录）：
+
+| 文件 | 内容 |
+|---|---|
+| `model_summary.csv` | R²_oos（全样本 / 大盘 / 小盘 / oracle 诊断）、IC / ICIR、多空年化 / 夏普 / 回撤 / 胜率（等权），`ls_*_vw`（A 股市值加权） |
+| `benchmark_compare.csv` | 同口径基准（合成因子、强单因子）+ 换手 + 0/15/30bp 成本后夏普；含市值加权夏普 |
+| `dm_matrix.csv` | Diebold-Mariano 两两检验（**GKX 修正版**：按月截面平均后 Newey-West 6 阶） |
+| `spanning_test.csv` | ML 多空对合成 + size + amihud 的张成检验 |
+| `variable_importance*.csv` | 置零法重要性（训练集、跨窗口平均，GKX §3.3） |
+| `params_<模型>.csv` | 各窗口选中的超参 |
+| `predictions.pkl` | 逐股票×月的样本外预测与标签——改检验或加权口径可直接重算、无需重训 |
+| `ls_monthly.csv` | 各模型逐月多空收益（等权 `_EW` / 市值加权 `_VW`） |
 
 ---
 
@@ -77,9 +89,10 @@ ic  = calc_ic(pred_wide, fwd_ret, method="spearman")  # backtest/metrics.py
 | 文件 | 职责 |
 |------|------|
 | `dataset.py` | 宽表因子 → MultiIndex(date, code) 长面板；截面 rank→[-1,1]；标签对齐 |
-| `cv.py` | 滚动窗口 60/24/12，每个窗口跑泄漏断言 |
-| `models.py` | 模型库 + 验证集调参（Huber 损失） |
-| `evaluate.py` | R²_oos / Diebold-Mariano / 置零法重要性 / 张成检验 |
+| `cv.py` | 扩展训练窗口 108 / 36 / 12（LWZ 2022），每个窗口跑泄漏断言 |
+| `models.py` | 模型库 + 验证集调参（Huber 损失）；`early_stopping` 模型（NN）不合并 train+val 重训 |
+| `nn.py` | 神经网络 NN1–NN5（GKX 设置，PyTorch，10 种子集成、验证集早停） |
+| `evaluate.py` | R²_oos / Diebold-Mariano（GKX 月度截面平均版）/ 置零法重要性 / 张成检验 / 常数预测月识别 |
 | `benchmark.py` | 同口径基准 + 换手率 + 交易成本敏感性 |
 | `pipeline.py` | 滚动训练 → 样本外预测 → 接回既有回测 |
 | `run.py` | 入口 + `ML_CONFIG` |
@@ -163,6 +176,7 @@ R²_oos = 1 − Σ(y − ŷ)² / Σy²          ← 分母不去均值，以 0 �
 | `RF` | 随机森林 |
 | `GBRT` | 梯度提升树 |
 | `LGBM` | LightGBM（可选依赖） |
+| `NN1`–`NN5` | 前馈神经网络 32 / 32-16 / … / 32-16-8-4-2（`nn.py`，需 conda-forge pytorch） |
 
 ### ⚠️ GBRT 用的是 `HistGradientBoostingRegressor`，不是 `GradientBoostingRegressor`
 
@@ -197,6 +211,20 @@ conda-forge 会自动带上；pip 的 wheel 在部分机器上会因找不到 `l
 而 import 失败。未安装时 `has_lightgbm()` 会自动跳过该模型。
 
 ---
+
+## 现行设置与评估约定（2026-10-06，详见方法文档 §二十四 ~ §二十七）
+
+| 项 | 现行 |
+|---|---|
+| 样本划分 | 扩展训练、验证定长前滚、每年重训；初始训练 **108 月**（2007–2015）/ 验证 **36 月** / 测试 12 月 × 8 窗 → **样本外 2019-01 ~ 2026-08**（91 月）。依据 Leippold, Wang & Zhou（2022, JFE） |
+| 特征 | A = 59 个量价 / 估值（`output/ml/base59_features.txt`）；B = 全部缓存特征 110 个（+ 会计块 48 等）；截面 rank → [-1, 1] |
+| 特征历史门槛 | 训练样本中有效月 < 24 的特征本窗置 0（`min_feature_months`；`rd_*` 自 2018-10 才有值，前 2 窗被屏蔽） |
+| 股票池 | 组建日规则 a–f（g 关，默认）；g 开对照用 `scripts/run_g_variant.py` |
+| 组合 | 10 分组多空；**等权与 A 股市值加权并报**（权重 = t 月末 `a_market_value`，与规则 g 同一函数） |
+| 常数预测月 | 某窗预测为截面常数（如 ENet 系数全 0）→ 按不持仓计：多空、IC 记 0（不剔除） |
+| DM 检验 | 每月截面平均损失差 → Newey-West 6 阶（GKX）；旧实现把股票×月当独立样本，已作废 |
+
+⚠️ 下面「数据规模」一节为 2026-08 初建时的记录（61 特征、60/24/12、样本外 2014 起），已不是现行设置，保留作历史。
 
 ## 数据规模
 
