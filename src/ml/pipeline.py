@@ -285,7 +285,7 @@ def evaluate(res: dict,
     5 分组**不可直接比**——十分档的多空端更极端，LS 收益天然更高，
     这是机械效应而非能力差异。要与既有因子对比时，两边都用同一个 n_groups。
     """
-    from src.backtest.engine import calc_monthly_returns, group_return
+    from src.backtest.engine import calc_monthly_returns, formation_weights, group_return
     from src.backtest.metrics import calc_ic, group_summary
     from src.ml.evaluate import r2_oos, size_subsample_r2, flat_prediction_months
 
@@ -298,6 +298,7 @@ def evaluate(res: dict,
     fwd = ret_m.shift(-1).reindex(index=oos_months)
 
     me = panel["me"] if "me" in panel.columns else None
+    cap_w = formation_weights(market=market)        # 市值加权（t 月末 A 股市值，#40）；港股为 None
     rows = {}
     for name, yhat in res["preds"].items():
         common = y_true.index.intersection(yhat.index)
@@ -326,6 +327,18 @@ def evaluate(res: dict,
             log.info("  %s：%d 个月截面常数预测，按不持仓计（多空、IC 记 0）", name, len(flat))
         summ = group_summary(grp, freq=12)
 
+        # 市值加权（#40）：同一分组成员，组内按 t 月末 A 股市值加权；常数预测月同样记多空 0
+        ls_vw = None
+        if cap_w is not None:
+            grp_vw = group_return(w, f, n_groups=n_groups, weights=cap_w)
+            if len(flat):
+                fi = grp_vw.index.intersection(flat)
+                grp_vw.loc[fi, :] = np.nan
+                grp_vw.loc[fi, "LS"] = 0.0
+            s_vw = group_summary(grp_vw, freq=12)
+            ls_vw = s_vw.loc["LS"] if "LS" in s_vw.index else None
+            res.setdefault("group_ret_vw", {})[name] = grp_vw
+
         ls = summ.loc["LS"] if "LS" in summ.index else None
         rows[name] = {
             "r2_oos": r2s.get("全样本", np.nan) * 100,
@@ -344,6 +357,9 @@ def evaluate(res: dict,
             "ls_sharpe": ls.get("夏普比率", np.nan) if ls is not None else np.nan,
             "ls_mdd": ls.get("最大回撤", np.nan) * 100 if ls is not None else np.nan,
             "win_rate": ls.get("月度胜率", np.nan) * 100 if ls is not None else np.nan,
+            "ls_ann_vw": ls_vw.get("年化收益", np.nan) * 100 if ls_vw is not None else np.nan,
+            "ls_sharpe_vw": ls_vw.get("夏普比率", np.nan) if ls_vw is not None else np.nan,
+            "ls_mdd_vw": ls_vw.get("最大回撤", np.nan) * 100 if ls_vw is not None else np.nan,
             "n_obs": len(common),
         }
         res.setdefault("group_ret", {})[name] = grp

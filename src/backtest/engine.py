@@ -33,6 +33,21 @@ def formation_pool(
     return build_formation_mask(start=start, end=end, config=formation_config)
 
 
+def formation_weights(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    market: str = "A",
+) -> Optional[pd.DataFrame]:
+    """组合市值加权的权重：t 月末 A 股市值（与规则 g 同一函数 `universe.formation_market_cap`）。
+
+    港股无 A 股市值口径，返回 None（只报等权）。（待办 #40，2026-10-06）
+    """
+    if market != "A":
+        return None
+    from src.data.universe import formation_market_cap
+    return formation_market_cap(start, end)
+
+
 def calc_monthly_returns(
     start: Optional[str] = None,
     end: Optional[str] = None,
@@ -87,6 +102,7 @@ def group_return(
     factor: pd.DataFrame,
     monthly_ret: pd.DataFrame,
     n_groups: int = 5,
+    weights: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     分组回测：按因子得分分成 n_groups 组，计算每组等权月度收益率。
@@ -99,6 +115,10 @@ def group_return(
         月度收益率（由 calc_monthly_returns() 计算）
     n_groups : int
         分组数（5 或 10）
+    weights : pd.DataFrame, optional
+        组内加权的权重（t 月末 A 股市值，`formation_weights`）。None = 等权。
+        分组成员与等权**完全相同**（同一分位点），只改组内收益的加权方式；
+        权重缺失或 ≤ 0 的股票只在市值加权的组内均值中不计入。（#40）
 
     Returns
     -------
@@ -122,16 +142,25 @@ def group_return(
     factor_aligned = factor_aligned.where(ret_aligned.notna())
 
     groups = group_by_score(factor_aligned, n_groups=n_groups)
+    w_aligned = (weights.reindex(index=common_idx, columns=common_cols)
+                 if weights is not None else None)
 
     records = []
     for date in common_idx:
         row_g   = groups.loc[date]
         row_ret = ret_aligned.loc[date]
         record  = {}
+        row_w = w_aligned.loc[date] if w_aligned is not None else None
         for g in range(1, n_groups + 1):
             stocks_in_group = row_g[row_g == g].index
             valid_ret       = row_ret.reindex(stocks_in_group).dropna()
-            record[f"G{g}"] = valid_ret.mean() if len(valid_ret) > 0 else np.nan
+            if row_w is None:
+                record[f"G{g}"] = valid_ret.mean() if len(valid_ret) > 0 else np.nan
+            else:
+                w = row_w.reindex(valid_ret.index)
+                ok = w.notna() & (w > 0)
+                record[f"G{g}"] = (float((valid_ret[ok] * w[ok]).sum() / w[ok].sum())
+                                   if ok.any() else np.nan)
         record["LS"] = record.get(f"G{n_groups}", np.nan) - record.get("G1", np.nan)
         records.append(record)
 

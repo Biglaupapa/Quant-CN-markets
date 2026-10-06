@@ -135,10 +135,11 @@ def evaluate_score(score: pd.DataFrame,
 
     `months` 传 ML 的样本外月份，保证区间对齐。
     """
-    from src.backtest.engine import calc_monthly_returns, group_return
+    from src.backtest.engine import calc_monthly_returns, formation_weights, group_return
     from src.backtest.metrics import calc_ic, group_summary
 
     ret_m = calc_monthly_returns(market=market)
+    cap_w = formation_weights(market=market)          # 市值加权（#40）
     fwd = ret_m.shift(-1)
 
     s = score.reindex(index=months).dropna(how="all")
@@ -159,6 +160,13 @@ def evaluate_score(score: pd.DataFrame,
         grp.loc[grp.index.intersection(flat), "LS"] = 0.0
     summ = group_summary(grp, freq=12)
     ls = summ.loc["LS"] if "LS" in summ.index else None
+    ls_vw = None
+    if cap_w is not None:
+        grp_vw = group_return(s, f, n_groups=n_groups, weights=cap_w)
+        if len(flat):
+            grp_vw.loc[grp_vw.index.intersection(flat), "LS"] = 0.0
+        sv = group_summary(grp_vw, freq=12)
+        ls_vw = sv.loc["LS"] if "LS" in sv.index else None
 
     row = {
         "ic": ic.mean(),
@@ -167,6 +175,8 @@ def evaluate_score(score: pd.DataFrame,
         "ls_sharpe": ls["夏普比率"] if ls is not None else np.nan,
         "ls_mdd": ls["最大回撤"] * 100 if ls is not None else np.nan,
         "win_rate": ls["月度胜率"] * 100 if ls is not None else np.nan,
+        "ls_sharpe_vw": ls_vw["夏普比率"] if ls_vw is not None else np.nan,
+        "ls_ann_vw": ls_vw["年化收益"] * 100 if ls_vw is not None else np.nan,
     }
 
     # 换手率与成本敏感性

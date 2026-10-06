@@ -50,7 +50,7 @@ from src.strategy.combine_factors import (
     combine_factors,
     lowdin_orthogonalize,
 )
-from src.backtest.engine import calc_monthly_returns, formation_pool, group_return
+from src.backtest.engine import calc_monthly_returns, formation_pool, formation_weights, group_return
 from src.backtest.metrics import calc_ic
 from src.backtest.report import print_factor_report, save_report, plot_nav_curve
 
@@ -680,6 +680,8 @@ def _run_single_market(
     try:
         monthly_ret = calc_monthly_returns(start=start, end=end, market=market)
         print(f"  ✓ 月度收益率矩阵：{monthly_ret.shape}")
+        # 组合市值加权的权重（t 月末 A 股市值，与规则 g 同口径；#40）。等权仍为主文件，市值加权另存 `_vw`
+        cap_w = formation_weights(start=start, end=end, market=market)
     except Exception as e:
         print(f"  ✗ 月度收益率计算失败：{e}")
         return {}
@@ -752,6 +754,10 @@ def _run_single_market(
                     with _stage("save_report"):
                         save_report(out_name, grp_ret, ic_series, stats_dir,
                                     freq=freq)
+                        if gi == 0 and cap_w is not None:      # 市值加权口径（#40），同一分组成员
+                            save_report(f"{out_name}_vw",
+                                        group_return(factor, fwd_ret, n_groups=ng, weights=cap_w),
+                                        ic_series, stats_dir, freq=freq)
                     factor_direction = directions.get(factor_name, 1)
                     with _stage("plot_nav_curve"):
                         plot_nav_curve(out_name, grp_ret, img_dir, freq=freq,
@@ -843,6 +849,9 @@ def _run_single_market(
         print_factor_report(eq_name, grp_ret_eq, ic_eq, freq=freq)
         if save_out:
             save_report(eq_name, grp_ret_eq, ic_eq, stats_dir, freq=freq)
+            if cap_w is not None:
+                save_report(f"{eq_name}_vw", group_return(composite_eq, fwd_ret, n_groups=_as_list(n_groups)[0],
+                                                          weights=cap_w), ic_eq, stats_dir, freq=freq)
             plot_nav_curve(eq_name, grp_ret_eq, img_dir, freq=freq, dual_panel=True)
 
     # 4.5 ICIR 权重合成
@@ -868,6 +877,9 @@ def _run_single_market(
         print_factor_report(ir_name, grp_ret_ir, ic_ir, freq=freq)
         if save_out:
             save_report(ir_name, grp_ret_ir, ic_ir, stats_dir, freq=freq)
+            if cap_w is not None:
+                save_report(f"{ir_name}_vw", group_return(composite_ir, fwd_ret, n_groups=_as_list(n_groups)[0],
+                                                          weights=cap_w), ic_ir, stats_dir, freq=freq)
             plot_nav_curve(ir_name, grp_ret_ir, img_dir, freq=freq, dual_panel=True)
 
     print(f"\n{'=' * 60}")

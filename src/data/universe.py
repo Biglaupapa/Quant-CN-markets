@@ -44,6 +44,17 @@ def _month_end_rows(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def formation_market_cap(start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
+    """t 月末 A 股市值（财汇 `a_market_value` = TOTMKTCAP，含限售股），取每月最后一个交易日那一行。
+
+    全框架「市值」的唯一口径：规则 g（剔最小 30%）、组合市值加权（#40）共用本函数；
+    LSY 复现 / CH 因子亦为 A 股市值（见方法文档 §十二）。
+    """
+    d = load_data(["a_market_value"], start=start, end=end)
+    cap = pd.to_numeric(d["a_market_value"].stack(), errors="coerce").unstack()
+    return _month_end_rows(cap)
+
+
 def _in_sample(codes: pd.Index, sample: str) -> pd.Series:
     """a：样本范围。lsy = 60/00/30；lsy_star = + 688/689；all = 全部（含北交所）。"""
     is_bj = codes.str.endswith(".BJ")
@@ -73,7 +84,7 @@ def build_formation_mask(
     cfg = {**FORMATION_CONFIG, **(config or {})}
     # 往前多取 13 个月，供「过去 12 个月成交天数」使用
     load_start = (pd.Timestamp(start) - pd.DateOffset(months=13)).strftime("%Y-%m-%d") if start else None
-    fields = (["trade_status", "is_st"] + (["a_market_value"] if cfg.get("exclude_bottom_size") else [])
+    fields = (["trade_status", "is_st"]
               + (["listing_days"] if cfg.get("min_listed_days") else []))
     d = load_data(fields, start=load_start, end=end)
     num = lambda x: pd.to_numeric(x.stack(), errors="coerce").unstack()
@@ -120,7 +131,7 @@ def build_formation_mask(
         mask &= _in_sample(cols, cfg["sample"]).values[None, :]
     # g：A 股市值（财汇 TOTMKTCAP，含限售股）最小 X% 剔除（排序范围：所选样本内当月有市值的全部股票）
     if cfg.get("exclude_bottom_size"):
-        cap = _month_end_rows(num(d["a_market_value"])).reindex(index=mask.index, columns=cols)
+        cap = formation_market_cap(load_start, end).reindex(index=mask.index, columns=cols)   # 与组合市值加权同口径
         if cfg.get("sample"):
             keep = _in_sample(cols, cfg["sample"]).values
             cap = cap.loc[:, keep]                       # 排序范围限定在样本内
